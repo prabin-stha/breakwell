@@ -1,0 +1,44 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific files
+xcuserdata/
+*.xcuserstate
+
+# Xcode build data
+DerivedData/
+.build/
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+
+# Xcode workspace user data
+*.xcworkspace/xcuserdata/
+
+# Build folders
+build/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Archives
+*.xcarchive
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.local
+
+# Firebase / API configs (if added later)
+GoogleService-Info.plist
+Secrets.plist
