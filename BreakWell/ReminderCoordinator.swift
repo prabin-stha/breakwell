@@ -77,6 +77,14 @@ actor ReminderCoordinator {
         logger.info("track \(track.id) updated: interval=\(Int(track.interval.seconds))s duration=\(Int(track.duration.seconds))s")
     }
 
+    /// Add more time to the currently firing break. Called from the overlay's
+    /// "+5 min · extend break" button — the user wants to rest longer.
+    func extendCurrentBreak(by seconds: TimeInterval) {
+        guard case .firing(let remaining, let content) = phase else { return }
+        setPhase(.firing(remaining: remaining + seconds, content: content))
+        logger.info("extended \(content.trackID) by \(Int(seconds))s")
+    }
+
     /// Push a track's next firing further into the future. Used by the
     /// pre-break heads-up's snooze buttons.
     func postponeFire(trackID: String, by seconds: TimeInterval) {

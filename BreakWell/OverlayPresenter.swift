@@ -11,9 +11,14 @@ final class OverlayPresenter {
 
     init(coordinator: ReminderCoordinator) {
         self.coordinator = coordinator
-        self.controller = BreakOverlayController(onSkip: {
-            Task { await coordinator.skipBreak() }
-        })
+        self.controller = BreakOverlayController(
+            onSkip: {
+                Task { await coordinator.skipBreak() }
+            },
+            onExtend: {
+                Task { await coordinator.extendCurrentBreak(by: 300) } // +5 min
+            }
+        )
     }
 
     func start() {
@@ -33,7 +38,7 @@ final class OverlayPresenter {
             if isShowing {
                 controller.update(remaining: remaining)
             } else {
-                controller.show(remaining: remaining)
+                controller.show(remaining: remaining, message: BreakMessages.random())
                 isShowing = true
             }
         default:

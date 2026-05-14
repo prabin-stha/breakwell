@@ -7,23 +7,27 @@ import SwiftUI
 final class BreakOverlayController {
     private let state = BreakOverlayState()
     private let onSkip: () -> Void
+    private let onExtend: () -> Void
     private var windows: [OverlayWindow] = []
     private var screenChangeObserver: NSObjectProtocol?
     private var keyMonitor: Any?
     private var isShowing = false
 
-    init(onSkip: @escaping () -> Void) {
+    private var lastEscapeAt: Date?
+    private let doubleEscapeWindow: TimeInterval = 1.5
+
+    init(onSkip: @escaping () -> Void, onExtend: @escaping () -> Void) {
         self.onSkip = onSkip
+        self.onExtend = onExtend
     }
 
-    // No deinit cleanup: controller lives for the app's lifetime, and `hide()`
-    // releases the observer + monitor on every break end.
-
-    func show(remaining: TimeInterval) {
+    func show(remaining: TimeInterval, message: BreakMessage) {
         state.remaining = remaining
+        state.title = message.title
+        state.message = message.description
         isShowing = true
+        lastEscapeAt = nil
         rebuildWindowsForCurrentScreens()
-        // Bring app to front so windows can become key and receive ESC.
         NSApp.activate(ignoringOtherApps: true)
         installScreenChangeObserver()
         installKeyMonitor()
@@ -35,12 +39,28 @@ final class BreakOverlayController {
 
     func hide() {
         isShowing = false
-        for window in windows {
-            window.orderOut(nil)
-        }
-        windows.removeAll()
+        lastEscapeAt = nil
         removeScreenChangeObserver()
         removeKeyMonitor()
+
+        let windowsToClose = windows
+        windows.removeAll()
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.4
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            for window in windowsToClose {
+                window.animator().alphaValue = 0
+            }
+        }, completionHandler: {
+            // NSAnimationContext completion runs on the main thread but isn't
+            // annotated @MainActor; assert the isolation explicitly.
+            MainActor.assumeIsolated {
+                for window in windowsToClose {
+                    window.orderOut(nil)
+                }
+            }
+        })
     }
 
     // MARK: - Screen handling
@@ -54,8 +74,6 @@ final class BreakOverlayController {
         for (index, screen) in NSScreen.screens.enumerated() {
             let window = makeOverlayWindow(for: screen)
             windows.append(window)
-            // Make only the first window key — single key window is enough since
-            // the ESC monitor below is application-wide.
             if index == 0 {
                 window.makeKeyAndOrderFront(nil)
             } else {
@@ -79,7 +97,11 @@ final class BreakOverlayController {
         window.isReleasedWhenClosed = false
         window.animationBehavior = .none
 
-        let root = BreakOverlayView(state: state, onSkip: { [weak self] in self?.onSkip() })
+        let root = BreakOverlayView(
+            state: state,
+            onSkip: { [weak self] in self?.onSkip() },
+            onExtend: { [weak self] in self?.onExtend() }
+        )
         window.contentView = NSHostingView(rootView: root)
         window.setFrame(screen.frame, display: false)
         return window
@@ -106,18 +128,21 @@ final class BreakOverlayController {
         }
     }
 
-    // MARK: - Key handling
+    // MARK: - Key handling — double-press ESC to skip
 
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
-        // App-wide local monitor; works regardless of which overlay window is key.
-        // Handler runs on the main thread but isn't annotated as such — keep `event`
-        // out of the @MainActor block so NSEvent (non-Sendable) doesn't cross isolation.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard event.keyCode == 53 else { return event }
             MainActor.assumeIsolated {
                 guard let self, self.isShowing else { return }
-                self.onSkip()
+                let now = Date()
+                if let last = self.lastEscapeAt, now.timeIntervalSince(last) < self.doubleEscapeWindow {
+                    self.lastEscapeAt = nil
+                    self.onSkip()
+                } else {
+                    self.lastEscapeAt = now
+                }
             }
             return nil
         }
@@ -136,9 +161,10 @@ final class BreakOverlayController {
 @Observable
 final class BreakOverlayState {
     var remaining: TimeInterval = 0
+    var title: String = ""
+    var message: String = ""
 }
 
-/// Borderless windows can't become key by default; override so the active overlay can.
 private final class OverlayWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }

@@ -36,13 +36,19 @@ private struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Timing") {
+            Section {
                 Stepper(value: $settings.workMinutes, in: 1...60) {
                     LabeledContent("Work interval", value: "\(settings.workMinutes) min")
                 }
-                Stepper(value: $settings.breakSeconds, in: 10...300, step: 5) {
-                    LabeledContent("Break duration", value: "\(settings.breakSeconds) sec")
+                Stepper(value: $settings.breakSeconds, in: 10...600, step: 5) {
+                    LabeledContent("Break duration", value: formatBreakDuration(settings.breakSeconds))
                 }
+            } header: {
+                Text("Timing")
+            } footer: {
+                Text("During a break you can extend it by 5 minutes from the overlay.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Notifications") {
@@ -64,6 +70,14 @@ private struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func formatBreakDuration(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds) sec" }
+        let m = seconds / 60
+        let s = seconds % 60
+        if s == 0 { return "\(m) min" }
+        return "\(m) min \(s) sec"
     }
 }
 

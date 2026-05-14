@@ -4,96 +4,184 @@ import AppKit
 struct BreakOverlayView: View {
     let state: BreakOverlayState
     let onSkip: () -> Void
+    let onExtend: () -> Void
 
     @State private var visible = false
 
     var body: some View {
         ZStack {
-            // NSVisualEffectView with `.behindWindow` blends with whatever's
-            // behind our borderless overlay window — giving the macOS-native
-            // frosted glass look over the user's desktop.
-            VisualEffectBackground(material: .fullScreenUI, blendingMode: .behindWindow)
-                .ignoresSafeArea()
+            AuroraBackground()
+            Color.black.opacity(0.15).ignoresSafeArea()
 
-            // Subtle darkening tint over the blur to make the message readable
-            // and signal "this is a break" without going fully opaque.
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
+            VStack(spacing: 0) {
+                // Padded below the menu bar / notch area so it's visible on
+                // notched MacBooks where our screen-saver-level overlay sits
+                // beneath the notch.
+                ClockIndicator()
+                    .padding(.top, 56)
 
-            VStack(spacing: 32) {
-                Text("Rest your eyes — look 20 feet away")
-                    .font(.system(size: 32, weight: .light, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+                Spacer()
+
+                VStack(spacing: 18) {
+                    Text(state.title)
+                        .font(.system(size: 60, weight: .regular, design: .serif))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white.opacity(0.95))
+                        .shadow(color: .black.opacity(0.25), radius: 12, y: 2)
+                        .padding(.horizontal, 80)
+
+                    Text(state.message)
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 80)
+                }
+
+                Spacer().frame(height: 80)
+
                 Text(timeString)
-                    .font(.system(size: 120, weight: .thin, design: .rounded))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 110, weight: .ultraLight, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
                     .monospacedDigit()
                     .contentTransition(.numericText())
-                    .shadow(color: .black.opacity(0.3), radius: 14, y: 3)
-            }
+                    .shadow(color: .black.opacity(0.35), radius: 18, y: 4)
 
-            VStack {
                 Spacer()
-                HStack {
-                    Spacer()
-                    Button(action: onSkip) {
-                        Text("Skip break")
-                            .font(.callout)
-                            .foregroundStyle(.white.opacity(0.55))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule()
-                                    .fill(.white.opacity(0.08))
-                            )
-                            .overlay(
-                                Capsule()
-                                    .stroke(.white.opacity(0.12), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 28)
-                    .padding(.bottom, 24)
-                }
+
+                bottomControls
+                    .padding(.bottom, 32)
             }
         }
         .opacity(visible ? 1 : 0)
         .animation(.default, value: state.remaining)
         .onAppear {
-            withAnimation(.easeOut(duration: 0.45)) {
+            withAnimation(.easeOut(duration: 0.55)) {
                 visible = true
             }
         }
     }
 
+    @ViewBuilder
+    private var bottomControls: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 14) {
+                Button(action: onSkip) {
+                    Text("Skip break")
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.78))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .overlay(
+                            Capsule().stroke(.white.opacity(0.32), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onExtend) {
+                    Text("+ 5 min  ·  extend break")
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text("Press Esc twice to skip")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.45))
+        }
+    }
+
     private var timeString: String {
         let total = max(0, Int(state.remaining.rounded(.up)))
-        if total >= 60 {
-            return String(format: "%d:%02d", total / 60, total % 60)
-        }
-        return "\(total)"
+        let m = total / 60
+        let s = total % 60
+        return "\(m):\(String(format: "%02d", s))"
     }
 }
 
-/// Wraps `NSVisualEffectView` for SwiftUI use. SwiftUI's `.background(.ultraThinMaterial)`
-/// only blurs in-window content; we need `.behindWindow` blending to blur the
-/// user's actual desktop behind our overlay window.
-private struct VisualEffectBackground: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-    let blendingMode: NSVisualEffectView.BlendingMode
+// MARK: - Time at the top
 
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
-        view.isEmphasized = false
-        return view
+private struct ClockIndicator: View {
+    @State private var now = Date()
+
+    private let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+
+    var body: some View {
+        Text(formatter.string(from: now))
+            .font(.system(size: 13, weight: .regular))
+            .tracking(2.0)
+            .foregroundStyle(.white.opacity(0.65))
+            .task {
+                while !Task.isCancelled {
+                    now = Date()
+                    try? await Task.sleep(for: .seconds(5))
+                }
+            }
+    }
+}
+
+// MARK: - Aurora background
+
+struct AuroraBackground: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0/30, paused: false)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            GeometryReader { geo in
+                ZStack {
+                    Color(red: 0.07, green: 0.05, blue: 0.09)
+
+                    blob(Color(red: 0.55, green: 0.20, blue: 0.20),
+                         baseX: 0.22, baseY: 0.30,
+                         phase: t * 0.10, ampX: 0.10, ampY: 0.08,
+                         scale: 1.4, opacity: 0.55, size: geo.size)
+
+                    blob(Color(red: 0.50, green: 0.40, blue: 0.18),
+                         baseX: 0.82, baseY: 0.38,
+                         phase: t * 0.08 + 1.0, ampX: 0.10, ampY: 0.10,
+                         scale: 1.3, opacity: 0.50, size: geo.size)
+
+                    blob(Color(red: 0.60, green: 0.28, blue: 0.48),
+                         baseX: 0.45, baseY: 0.75,
+                         phase: t * 0.09 + 2.5, ampX: 0.14, ampY: 0.10,
+                         scale: 1.5, opacity: 0.58, size: geo.size)
+
+                    blob(Color(red: 0.30, green: 0.16, blue: 0.34),
+                         baseX: 0.68, baseY: 0.70,
+                         phase: t * 0.07 + 4.0, ampX: 0.10, ampY: 0.12,
+                         scale: 1.2, opacity: 0.45, size: geo.size)
+                }
+            }
+            .ignoresSafeArea()
+        }
     }
 
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blendingMode
+    @ViewBuilder
+    private func blob(
+        _ color: Color,
+        baseX: CGFloat,
+        baseY: CGFloat,
+        phase: Double,
+        ampX: CGFloat,
+        ampY: CGFloat,
+        scale: CGFloat,
+        opacity: Double,
+        size: CGSize
+    ) -> some View {
+        let dim = min(size.width, size.height) * scale * 0.55
+        let x = size.width * (baseX + ampX * CGFloat(sin(phase)))
+        let y = size.height * (baseY + ampY * CGFloat(cos(phase * 1.3)))
+
+        Circle()
+            .fill(color)
+            .frame(width: dim, height: dim)
+            .opacity(opacity)
+            .blur(radius: 120)
+            .position(x: x, y: y)
     }
 }
