@@ -15,8 +15,8 @@ final class OverlayPresenter {
             onSkip: {
                 Task { await coordinator.skipBreak() }
             },
-            onExtend: {
-                Task { await coordinator.extendCurrentBreak(by: 300) } // +5 min
+            onExtend: { seconds in
+                Task { await coordinator.extendCurrentBreak(by: seconds) }
             }
         )
     }

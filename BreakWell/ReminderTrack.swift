@@ -1,10 +1,11 @@
 import Foundation
 
 nonisolated enum InterruptionLevel: Sendable, Equatable {
-    case overlay        // full-screen, modal — eye rest, pomodoro breaks
-    case banner         // notification banner — water, etc.
-    case menuBarPulse   // subtle icon animation only
-    case soundOnly      // chime, no visual
+    case overlay         // full-screen, modal — eye rest, pomodoro breaks
+    case prominentCard   // centered floating card with actions — hydration
+    case banner          // notification banner — generic reminders
+    case menuBarPulse    // subtle icon animation only
+    case soundOnly       // chime, no visual
 }
 
 /// The user-visible content of a single reminder firing.

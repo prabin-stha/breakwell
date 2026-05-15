@@ -167,17 +167,17 @@ actor ReminderCoordinator {
         case .working:
             let now = Date()
 
-            // Banner tracks (water etc.) fire as side effects. They don't
+            // Banner / prominent-card tracks fire as side effects. They don't
             // change the phase and aren't considered a "break" — the working
             // countdown stays focused on eye-rest.
-            let dueBanners = tracks.filter {
-                $0.interruption == .banner &&
+            let dueSideEffects = tracks.filter {
+                ($0.interruption == .banner || $0.interruption == .prominentCard) &&
                 (nextFireDates[$0.id] ?? .distantFuture) <= now
             }
-            for track in dueBanners {
+            for track in dueSideEffects {
                 if !isSuppressed {
                     bannerHandler?(track.makeContent())
-                    logger.info("→ \(track.id) banner sent")
+                    logger.info("→ \(track.id) fired (\(String(describing: track.interruption)))")
                 }
                 nextFireDates[track.id] = now.addingTimeInterval(track.interval.seconds)
             }

@@ -2,12 +2,21 @@ import SwiftUI
 
 struct MenuBarView: View {
     let viewModel: SchedulerViewModel
+    let hydration: HydrationState
+    let settings: Settings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusRow
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
+
+            if settings.waterEnabled {
+                Divider()
+                HydrationWidget(state: hydration, showGoalMarker: settings.waterShowGoalMarker)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+            }
 
             Divider()
 
@@ -180,11 +189,25 @@ private struct MenuRow: View {
         .padding(.horizontal, 6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(hovering && !disabled ? Color.primary.opacity(0.07) : Color.clear)
+                .fill(hovering && !disabled ? Color.primary.opacity(0.09) : Color.clear)
         )
         .disabled(disabled)
         .foregroundStyle(disabled ? Color.secondary : Color.primary)
-        .onHover { hovering = $0 }
+        .onHover { value in
+            hovering = value
+            guard !disabled else { return }
+            if value {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .onDisappear {
+            if hovering {
+                NSCursor.pop()
+                hovering = false
+            }
+        }
         .animation(.smooth(duration: 0.15), value: hovering)
     }
 }

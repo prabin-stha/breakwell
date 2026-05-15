@@ -25,6 +25,8 @@ struct BreakWellApp: App {
     private let loginItemService: LoginItemService
     private let breakSoundPlayer: BreakSoundPlayer
     private let floatingBanner: FloatingBannerController
+    private let prominentCard: ProminentCardController
+    private let hydration: HydrationState
 
     init() {
         Self.terminateOtherInstances()
@@ -38,24 +40,39 @@ struct BreakWellApp: App {
         )
         var initialTracks: [any ReminderTrack] = [eyeRest]
         if settings.waterEnabled {
-            initialTracks.append(WaterTrack(interval: .seconds(settings.waterIntervalMinutes * 60)))
+            initialTracks.append(WaterTrack(interval: .seconds(settings.waterIntervalMinutes.minutesAsSeconds)))
         }
 
         let notificationService = NotificationService()
         let floatingBanner = FloatingBannerController()
         self.floatingBanner = floatingBanner
 
+        let hydration = HydrationState()
+        hydration.decayDuration = settings.waterDecayMinutes.minutesAsSeconds
+        hydration.dailyResetHour = settings.waterResetHour
+        self.hydration = hydration
+
+        let prominentCard = ProminentCardController(settings: settings, hydration: hydration)
+        self.prominentCard = prominentCard
+
         let bannerHandler: @Sendable (ReminderContent) -> Void = { content in
             Task { @MainActor in
-                let state = FloatingBannerState(
-                    title: content.title,
-                    body: content.body,
-                    icon: .symbol(
-                        name: iconSymbol(for: content.trackID),
-                        color: iconColor(for: content.trackID)
+                switch content.interruption {
+                case .banner:
+                    let state = FloatingBannerState(
+                        title: content.title,
+                        body: content.body,
+                        icon: .symbol(
+                            name: iconSymbol(for: content.trackID),
+                            color: iconColor(for: content.trackID)
+                        )
                     )
-                )
-                floatingBanner.show(state)
+                    floatingBanner.show(state)
+                case .prominentCard:
+                    prominentCard.show(content: content)
+                default:
+                    break
+                }
             }
         }
 
@@ -145,7 +162,7 @@ struct BreakWellApp: App {
         }
         settings.onWaterEnabledChanged = { enabled in
             if enabled {
-                let track = WaterTrack(interval: .seconds(settings.waterIntervalMinutes * 60))
+                let track = WaterTrack(interval: .seconds(settings.waterIntervalMinutes.minutesAsSeconds))
                 Task { await coordinator.updateTrack(track) }
             } else {
                 Task { await coordinator.removeTrack(id: "water") }
@@ -153,8 +170,14 @@ struct BreakWellApp: App {
         }
         settings.onWaterIntervalChanged = { minutes in
             guard settings.waterEnabled else { return }
-            let track = WaterTrack(interval: .seconds(minutes * 60))
+            let track = WaterTrack(interval: .seconds(minutes.minutesAsSeconds))
             Task { await coordinator.updateTrack(track) }
+        }
+        settings.onWaterDecayChanged = { minutes in
+            hydration.decayDuration = minutes.minutesAsSeconds
+        }
+        settings.onWaterResetHourChanged = { hour in
+            hydration.dailyResetHour = hour
         }
         let systemEnabled = loginItemService.isEnabled
         if settings.launchAtLogin != systemEnabled {
@@ -190,7 +213,7 @@ struct BreakWellApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(viewModel: viewModel)
+            MenuBarView(viewModel: viewModel, hydration: hydration, settings: settings)
         } label: {
             Image(systemName: labelSymbol)
         }

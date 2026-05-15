@@ -7,11 +7,12 @@ import SwiftUI
 final class FloatingBannerController {
     private var window: BannerWindow?
     private var dismissTask: Task<Void, Never>?
+    private var activationObserver: NSObjectProtocol?
     private(set) var currentState: FloatingBannerState?
 
     private let topInset: CGFloat = 36
     private let minWidth: CGFloat = 260
-    private let maxWidth: CGFloat = 540
+    private let maxWidth: CGFloat = 700
 
     /// Show the banner. Caller retains the state object and can mutate it to
     /// update the title (live countdowns) or swap actions on the fly.
@@ -26,15 +27,20 @@ final class FloatingBannerController {
 
         let win = BannerWindow(
             contentRect: .zero,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         win.isOpaque = false
         win.backgroundColor = .clear
-        win.hasShadow = false
-        win.level = .floating
+        // Let NSWindow render the shadow — it follows the opaque content's
+        // shape exactly (rounded), so no rectangular cutoff.
+        win.hasShadow = true
+        // statusBar level keeps the banner visible regardless of which app is
+        // frontmost — floating gets demoted when our app deactivates.
+        win.level = .statusBar
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        win.hidesOnDeactivate = false
         win.ignoresMouseEvents = false
         win.animationBehavior = .none
 
@@ -43,6 +49,11 @@ final class FloatingBannerController {
         })
         let hosting = NSHostingView(rootView: view)
         hosting.translatesAutoresizingMaskIntoConstraints = false
+        // Ensure the hosting view's own layer doesn't paint an opaque
+        // rectangular backing behind the SwiftUI rounded content.
+        hosting.wantsLayer = true
+        hosting.layer?.backgroundColor = NSColor.clear.cgColor
+        hosting.layer?.isOpaque = false
         win.contentView = hosting
 
         hosting.layout()
@@ -53,6 +64,7 @@ final class FloatingBannerController {
 
         win.orderFront(nil)
         self.window = win
+        installActivationObserver()
 
         guard autoDismissAfter > 0 else { return }
         let delay = autoDismissAfter
@@ -67,8 +79,33 @@ final class FloatingBannerController {
         dismissTask?.cancel()
         dismissTask = nil
         currentState = nil
+        removeActivationObserver()
         window?.orderOut(nil)
         window = nil
+    }
+
+    // MARK: - Re-assert front on app activation
+
+    private func installActivationObserver() {
+        guard activationObserver == nil else { return }
+        // When any app activates, push our banner back to the front so it
+        // doesn't get visually demoted in the focus transition.
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.window?.orderFront(nil)
+            }
+        }
+    }
+
+    private func removeActivationObserver() {
+        if let activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+            self.activationObserver = nil
+        }
     }
 
     private func topCenterFrame(width: CGFloat, height: CGFloat) -> NSRect {
@@ -82,7 +119,7 @@ final class FloatingBannerController {
     }
 }
 
-private final class BannerWindow: NSWindow {
+private final class BannerWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }

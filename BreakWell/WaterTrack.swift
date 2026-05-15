@@ -8,7 +8,7 @@ struct WaterTrack: ReminderTrack {
     nonisolated var displayName: String { "Hydration" }
     nonisolated let interval: Duration
     nonisolated var duration: Duration { .seconds(30) }  // notification auto-dismiss window
-    nonisolated var interruption: InterruptionLevel { .banner }
+    nonisolated var interruption: InterruptionLevel { .prominentCard }
     nonisolated var isGroupable: Bool { true }
     nonisolated var respectsPomodoro: Bool { true }
 

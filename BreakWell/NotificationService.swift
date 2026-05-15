@@ -109,14 +109,13 @@ final class PreBreakNotifier {
                 dismissBanner()
                 firedThisCycle = false
             } else if remaining > 0 {
-                guard settings.preBreakNotification, !engine.state.isActive else {
-                    dismissBanner()
-                    return
-                }
                 if let state = bannerState {
-                    // Live update of countdown
+                    // Already showing — just update the countdown. Don't dismiss
+                    // when suppression toggles mid-window: window switches to
+                    // Slack/Zoom etc. would otherwise kill the banner and it
+                    // wouldn't come back.
                     state.title = formatMMSS(remaining)
-                } else if !firedThisCycle {
+                } else if !firedThisCycle && settings.preBreakNotification && !engine.state.isActive {
                     firedThisCycle = true
                     showBanner(initialRemaining: remaining)
                 }
@@ -130,8 +129,9 @@ final class PreBreakNotifier {
     private func showBanner(initialRemaining: TimeInterval) {
         let state = FloatingBannerState(
             title: formatMMSS(initialRemaining),
-            body: "Almost time. Your eyes will appreciate this.",
+            body: "Your break starts shortly.",
             icon: .clock(color: Color(red: 1.0, green: 0.55, blue: 0.65)),
+            prominence: .prominent,
             actions: makeActions()
         )
         bannerState = state
@@ -147,7 +147,7 @@ final class PreBreakNotifier {
 
     private func makeActions() -> [FloatingBannerState.Action] {
         [
-            .init(label: "Start this break now", isPrimary: true, handler: { [coordinator] in
+            .init(label: "Start break now", isPrimary: true, handler: { [coordinator] in
                 Task { await coordinator.takeBreakNow() }
             }),
             .init(label: "+1m", isPrimary: false, handler: { [coordinator] in

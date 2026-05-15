@@ -7,7 +7,7 @@ import SwiftUI
 final class BreakOverlayController {
     private let state = BreakOverlayState()
     private let onSkip: () -> Void
-    private let onExtend: () -> Void
+    private let onExtend: (TimeInterval) -> Void
     private var windows: [OverlayWindow] = []
     private var screenChangeObserver: NSObjectProtocol?
     private var keyMonitor: Any?
@@ -16,7 +16,7 @@ final class BreakOverlayController {
     private var lastEscapeAt: Date?
     private let doubleEscapeWindow: TimeInterval = 1.5
 
-    init(onSkip: @escaping () -> Void, onExtend: @escaping () -> Void) {
+    init(onSkip: @escaping () -> Void, onExtend: @escaping (TimeInterval) -> Void) {
         self.onSkip = onSkip
         self.onExtend = onExtend
     }
@@ -100,7 +100,7 @@ final class BreakOverlayController {
         let root = BreakOverlayView(
             state: state,
             onSkip: { [weak self] in self?.onSkip() },
-            onExtend: { [weak self] in self?.onExtend() }
+            onExtend: { [weak self] seconds in self?.onExtend(seconds) }
         )
         window.contentView = NSHostingView(rootView: root)
         window.setFrame(screen.frame, display: false)

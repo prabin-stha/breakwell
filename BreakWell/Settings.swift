@@ -17,6 +17,9 @@ final class Settings {
         static let calendarBufferMinutes = "calendarBufferMinutes"
         static let waterEnabled = "waterEnabled"
         static let waterIntervalMinutes = "waterIntervalMinutes"
+        static let waterDecayMinutes = "waterDecayMinutes"
+        static let waterResetHour = "waterResetHour"
+        static let waterShowGoalMarker = "waterShowGoalMarker"
     }
 
     private let defaults: UserDefaults
@@ -41,6 +44,8 @@ final class Settings {
 
     var onWaterEnabledChanged: ((Bool) -> Void)?
     var onWaterIntervalChanged: ((Int) -> Void)?
+    var onWaterDecayChanged: ((Int) -> Void)?
+    var onWaterResetHourChanged: ((Int) -> Void)?
 
     var workMinutes: Int {
         didSet {
@@ -108,6 +113,23 @@ final class Settings {
             onWaterIntervalChanged?(waterIntervalMinutes)
         }
     }
+    var waterDecayMinutes: Int {
+        didSet {
+            defaults.set(waterDecayMinutes, forKey: Keys.waterDecayMinutes)
+            onWaterDecayChanged?(waterDecayMinutes)
+        }
+    }
+    var waterResetHour: Int {
+        didSet {
+            defaults.set(waterResetHour, forKey: Keys.waterResetHour)
+            onWaterResetHourChanged?(waterResetHour)
+        }
+    }
+    var waterShowGoalMarker: Bool {
+        didSet {
+            defaults.set(waterShowGoalMarker, forKey: Keys.waterShowGoalMarker)
+        }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -123,7 +145,10 @@ final class Settings {
             Keys.calendarDetection: false,
             Keys.calendarBufferMinutes: 2,
             Keys.waterEnabled: true,
-            Keys.waterIntervalMinutes: 60
+            Keys.waterIntervalMinutes: 60,
+            Keys.waterDecayMinutes: 90,
+            Keys.waterResetHour: 4,
+            Keys.waterShowGoalMarker: false
         ])
         self.workMinutes = defaults.integer(forKey: Keys.workMinutes)
         self.breakSeconds = defaults.integer(forKey: Keys.breakSeconds)
@@ -138,8 +163,11 @@ final class Settings {
         self.calendarBufferMinutes = defaults.integer(forKey: Keys.calendarBufferMinutes)
         self.waterEnabled = defaults.bool(forKey: Keys.waterEnabled)
         self.waterIntervalMinutes = defaults.integer(forKey: Keys.waterIntervalMinutes)
+        self.waterDecayMinutes = defaults.integer(forKey: Keys.waterDecayMinutes)
+        self.waterResetHour = defaults.integer(forKey: Keys.waterResetHour)
+        self.waterShowGoalMarker = defaults.bool(forKey: Keys.waterShowGoalMarker)
     }
 
-    var workDuration: TimeInterval { TimeInterval(workMinutes * 60) }
+    var workDuration: TimeInterval { workMinutes.minutesAsSeconds }
     var breakDuration: TimeInterval { TimeInterval(breakSeconds) }
 }

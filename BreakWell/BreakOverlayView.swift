@@ -4,7 +4,7 @@ import AppKit
 struct BreakOverlayView: View {
     let state: BreakOverlayState
     let onSkip: () -> Void
-    let onExtend: () -> Void
+    let onExtend: (TimeInterval) -> Void
 
     @State private var visible = false
 
@@ -64,27 +64,13 @@ struct BreakOverlayView: View {
     @ViewBuilder
     private var bottomControls: some View {
         VStack(spacing: 12) {
-            HStack(spacing: 14) {
-                Button(action: onSkip) {
-                    Text("Skip break")
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.78))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 7)
-                        .overlay(
-                            Capsule().stroke(.white.opacity(0.32), lineWidth: 1)
-                        )
+            HStack(spacing: 10) {
+                OverlayCapsuleButton(label: "Skip break", prominent: true) {
+                    onSkip()
                 }
-                .buttonStyle(.plain)
-
-                Button(action: onExtend) {
-                    Text("+ 5 min  ·  extend break")
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                }
-                .buttonStyle(.plain)
+                OverlayCapsuleButton(label: "+ 2 min") { onExtend(120) }
+                OverlayCapsuleButton(label: "+ 5 min") { onExtend(300) }
+                OverlayCapsuleButton(label: "+ 10 min") { onExtend(600) }
             }
 
             Text("Press Esc twice to skip")
@@ -98,6 +84,61 @@ struct BreakOverlayView: View {
         let m = total / 60
         let s = total % 60
         return "\(m):\(String(format: "%02d", s))"
+    }
+}
+
+// MARK: - Pill button with hover effect
+
+private struct OverlayCapsuleButton: View {
+    let label: String
+    var prominent: Bool = false
+    let action: () -> Void
+
+    @State private var hovering = false
+    @State private var pressed = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(.white.opacity(hovering ? 0.98 : 0.78))
+                .padding(.horizontal, prominent ? 16 : 14)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule().fill(.white.opacity(hovering ? 0.10 : 0.0))
+                )
+                .overlay(
+                    Capsule().stroke(
+                        .white.opacity(hovering ? 0.55 : (prominent ? 0.32 : 0.18)),
+                        lineWidth: 1
+                    )
+                )
+                .scaleEffect(pressed ? 0.96 : (hovering ? 1.04 : 1.0))
+        }
+        .buttonStyle(.plain)
+        .onHover { value in
+            hovering = value
+            applyCursor(hovering: value)
+        }
+        .onLongPressGesture(minimumDuration: 0, perform: {}, onPressingChanged: { isPressing in
+            pressed = isPressing
+        })
+        .onDisappear {
+            if hovering {
+                NSCursor.pop()
+                hovering = false
+            }
+        }
+        .animation(.smooth(duration: 0.18), value: hovering)
+        .animation(.smooth(duration: 0.10), value: pressed)
+    }
+
+    private func applyCursor(hovering: Bool) {
+        if hovering {
+            NSCursor.pointingHand.push()
+        } else {
+            NSCursor.pop()
+        }
     }
 }
 

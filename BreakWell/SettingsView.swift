@@ -36,19 +36,13 @@ private struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
-            Section {
+            Section("Timing") {
                 Stepper(value: $settings.workMinutes, in: 1...60) {
                     LabeledContent("Work interval", value: "\(settings.workMinutes) min")
                 }
                 Stepper(value: $settings.breakSeconds, in: 10...600, step: 5) {
                     LabeledContent("Break duration", value: formatBreakDuration(settings.breakSeconds))
                 }
-            } header: {
-                Text("Timing")
-            } footer: {
-                Text("During a break you can extend it by 5 minutes from the overlay.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section("Notifications") {
@@ -62,6 +56,15 @@ private struct GeneralSettingsView: View {
                     Stepper(value: $settings.waterIntervalMinutes, in: 30...180, step: 15) {
                         LabeledContent("Reminder every", value: "\(settings.waterIntervalMinutes) min")
                     }
+                    Stepper(value: $settings.waterDecayMinutes, in: 30...180, step: 15) {
+                        LabeledContent("Hydration bar drains over", value: "\(settings.waterDecayMinutes) min")
+                    }
+                    Picker("Daily reset time", selection: $settings.waterResetHour) {
+                        ForEach(0..<24, id: \.self) { hour in
+                            Text(formatHour(hour)).tag(hour)
+                        }
+                    }
+                    Toggle("Show goal marker on bar", isOn: $settings.waterShowGoalMarker)
                 }
             }
 
@@ -78,6 +81,12 @@ private struct GeneralSettingsView: View {
         let s = seconds % 60
         if s == 0 { return "\(m) min" }
         return "\(m) min \(s) sec"
+    }
+
+    private func formatHour(_ hour: Int) -> String {
+        let suffix = hour < 12 ? "AM" : "PM"
+        let display = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour)
+        return "\(display) \(suffix)"
     }
 }
 
