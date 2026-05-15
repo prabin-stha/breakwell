@@ -18,8 +18,8 @@ actor ReminderCoordinator {
 
     private var tracks: [any ReminderTrack] = []
     private var nextFireDates: [String: Date] = [:]
-    private var groupingEngine = GroupingEngine()
-    private let bannerHandler: (@Sendable (ReminderContent) -> Void)?
+    private let presentHandler: (@Sendable (ReminderContent) -> Void)?
+    private let dismissHandler: (@Sendable (InterruptionLevel) -> Void)?
 
     private(set) var phase: CoordinatorPhase = .working(remaining: 0)
     private var tickTask: Task<Void, Never>?
@@ -29,13 +29,30 @@ actor ReminderCoordinator {
     private var deferredFireAt: Date?
     private let postDeferralGrace: TimeInterval = 5
 
-    init(tracks: [any ReminderTrack], bannerHandler: (@Sendable (ReminderContent) -> Void)? = nil) {
+    // MARK: - Conflict resolution state
+
+    private struct ShowingState {
+        let track: any ReminderTrack
+        let presentedAt: Date
+        var expirationTask: Task<Void, Never>?
+    }
+    private var currentlyShowing: ShowingState?
+    private var deferralCounts: [String: Int] = [:]
+    private let preemptionDelay: TimeInterval = 120
+    private let maxDeferrals = 3
+
+    init(
+        tracks: [any ReminderTrack],
+        presentHandler: (@Sendable (ReminderContent) -> Void)? = nil,
+        dismissHandler: (@Sendable (InterruptionLevel) -> Void)? = nil
+    ) {
         let now = Date()
         for track in tracks {
             nextFireDates[track.id] = now.addingTimeInterval(track.interval.seconds)
         }
         self.tracks = tracks
-        self.bannerHandler = bannerHandler
+        self.presentHandler = presentHandler
+        self.dismissHandler = dismissHandler
         if let earliest = nextFireDates.values.min() {
             phase = .working(remaining: max(0, earliest.timeIntervalSince(now)))
         }
@@ -62,8 +79,6 @@ actor ReminderCoordinator {
 
     // MARK: - Track management
 
-    /// Replace (or add) a track. Resets its next-fire date to now + new interval.
-    /// Matches phase 1's "edit work interval = restart countdown" behavior.
     func updateTrack(_ track: any ReminderTrack) {
         if let i = tracks.firstIndex(where: { $0.id == track.id }) {
             tracks[i] = track
@@ -77,16 +92,14 @@ actor ReminderCoordinator {
         logger.info("track \(track.id) updated: interval=\(Int(track.interval.seconds))s duration=\(Int(track.duration.seconds))s")
     }
 
-    /// Add more time to the currently firing break. Called from the overlay's
-    /// "+5 min · extend break" button — the user wants to rest longer.
+    /// Add more time to the currently firing break.
     func extendCurrentBreak(by seconds: TimeInterval) {
         guard case .firing(let remaining, let content) = phase else { return }
         setPhase(.firing(remaining: remaining + seconds, content: content))
         logger.info("extended \(content.trackID) by \(Int(seconds))s")
     }
 
-    /// Push a track's next firing further into the future. Used by the
-    /// pre-break heads-up's snooze buttons.
+    /// Push a track's next firing further into the future.
     func postponeFire(trackID: String, by seconds: TimeInterval) {
         guard let current = nextFireDates[trackID] else { return }
         nextFireDates[trackID] = current.addingTimeInterval(seconds)
@@ -107,11 +120,13 @@ actor ReminderCoordinator {
 
     // MARK: - Commands (from UI)
 
-    /// Fire an overlay-level track immediately. For phase 2.5 milestone 1 this
-    /// means the eye-rest track; later it will pick the relevant overlay track.
     func takeBreakNow() {
         guard let track = tracks.first(where: { $0.interruption == .overlay }) ?? tracks.first else { return }
-        startFiring(track: track)
+        // User explicitly asked for a break — preempt whatever's showing.
+        if let current = currentlyShowing {
+            preempt(current.track)
+        }
+        present(track)
         logger.info("→ manual fire \(track.id)")
     }
 
@@ -125,11 +140,10 @@ actor ReminderCoordinator {
         guard case .deferred(_, let content) = phase,
               let track = tracks.first(where: { $0.id == content.trackID }) else { return }
         deferredFireAt = nil
-        startFiring(track: track)
+        tryShow(track)
         logger.info("→ deferred \(content.trackID) taken manually")
     }
 
-    /// Driven by `SuppressionEngine`. Same defer/grace/absorb semantics as phase 2.
     func setSuppressed(_ suppressed: Bool) {
         guard suppressed != isSuppressed else { return }
         isSuppressed = suppressed
@@ -166,39 +180,34 @@ actor ReminderCoordinator {
         switch phase {
         case .working:
             let now = Date()
+            let due = tracks
+                .filter { (nextFireDates[$0.id] ?? .distantFuture) <= now }
+                // High priority first so it wins any conflict resolution.
+                .sorted { $0.interruption.priority > $1.interruption.priority }
 
-            // Banner / prominent-card tracks fire as side effects. They don't
-            // change the phase and aren't considered a "break" — the working
-            // countdown stays focused on eye-rest.
-            let dueSideEffects = tracks.filter {
-                ($0.interruption == .banner || $0.interruption == .prominentCard) &&
-                (nextFireDates[$0.id] ?? .distantFuture) <= now
-            }
-            for track in dueSideEffects {
-                if !isSuppressed {
-                    bannerHandler?(track.makeContent())
-                    logger.info("→ \(track.id) fired (\(String(describing: track.interruption)))")
-                }
-                nextFireDates[track.id] = now.addingTimeInterval(track.interval.seconds)
-            }
-
-            // Overlay tracks (eye-rest etc.) drive the phase via the grouping engine.
-            let overlayTracks = tracks.filter { $0.interruption == .overlay }
-            let group = groupingEngine.tracksToFire(
-                now: now,
-                tracks: overlayTracks,
-                nextFireDates: nextFireDates
-            )
-
-            if let primary = group.first {
+            for track in due {
                 if isSuppressed {
-                    let content = primary.makeContent()
-                    setPhase(.deferred(since: now, content: content))
-                    logger.info("→ \(primary.id) deferred")
+                    if track.interruption == .overlay {
+                        // Overlay suppression uses the existing .deferred phase.
+                        let content = track.makeContent()
+                        setPhase(.deferred(since: now, content: content))
+                        logger.info("→ \(track.id) deferred (suppressed)")
+                        // Other due tracks: skip silently this cycle.
+                        for other in due where other.id != track.id {
+                            nextFireDates[other.id] = now.addingTimeInterval(other.interval.seconds)
+                        }
+                        return
+                    } else {
+                        // Banner/card suppression: silently reschedule, no fire.
+                        nextFireDates[track.id] = now.addingTimeInterval(track.interval.seconds)
+                    }
                 } else {
-                    startFiring(track: primary)
+                    tryShow(track)
                 }
-            } else {
+            }
+
+            // Only recompute when we didn't transition to firing/deferred.
+            if case .working = phase {
                 recomputeWorkingState()
             }
 
@@ -216,23 +225,97 @@ actor ReminderCoordinator {
                 guard case .deferred(_, let content) = phase,
                       let track = tracks.first(where: { $0.id == content.trackID }) else { return }
                 deferredFireAt = nil
-                startFiring(track: track)
+                tryShow(track)
                 logger.info("→ \(content.trackID) deferred firing now")
             }
         }
     }
 
-    private func startFiring(track: any ReminderTrack) {
-        // Overlay-level firings only — banner tracks are handled inline in tick().
-        guard track.interruption == .overlay else {
-            logger.error("startFiring called on non-overlay track \(track.id) — ignoring")
+    // MARK: - tryShow: priority-based conflict resolution
+
+    /// Decide whether `track` should present now, preempt, or defer.
+    private func tryShow(_ track: any ReminderTrack) {
+        if let current = currentlyShowing {
+            if track.interruption.priority > current.track.interruption.priority {
+                logger.info("preempting \(current.track.id) for \(track.id)")
+                preempt(current.track)
+                present(track)
+            } else {
+                // Equal or lower priority → defer for 2 min, up to 3 attempts.
+                deferTrack(track)
+            }
+        } else {
+            present(track)
+        }
+    }
+
+    private func present(_ track: any ReminderTrack) {
+        deferralCounts[track.id] = 0
+        let presentedAt = Date()
+
+        switch track.interruption {
+        case .overlay:
+            let content = track.makeContent()
+            setPhase(.firing(remaining: track.duration.seconds, content: content))
+            // Next-fire date is set in endFiring after firing concludes.
+            currentlyShowing = ShowingState(track: track, presentedAt: presentedAt, expirationTask: nil)
+
+        case .prominentCard, .banner:
+            let content = track.makeContent()
+            // Schedule next firing immediately — banner/card don't block the cycle.
+            nextFireDates[track.id] = presentedAt.addingTimeInterval(track.interval.seconds)
+            // Auto-clear `currentlyShowing` after the track's duration, matching
+            // the controller's own auto-dismiss. If the user closes it earlier
+            // (skip / X), the slot stays "showing" until this timeout — a minor
+            // imprecision we accept for the first cut.
+            let durationSeconds = track.duration.seconds
+            let trackID = track.id
+            let expirationTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(durationSeconds))
+                guard !Task.isCancelled else { return }
+                await self?.handleExpiration(trackID: trackID)
+            }
+            currentlyShowing = ShowingState(track: track, presentedAt: presentedAt, expirationTask: expirationTask)
+            presentHandler?(content)
+            logger.info("→ \(track.id) presented (\(String(describing: track.interruption)))")
+
+        case .menuBarPulse, .soundOnly:
+            nextFireDates[track.id] = presentedAt.addingTimeInterval(track.interval.seconds)
+        }
+    }
+
+    private func preempt(_ track: any ReminderTrack) {
+        currentlyShowing?.expirationTask?.cancel()
+        currentlyShowing = nil
+
+        switch track.interruption {
+        case .overlay:
+            // Drop out of firing immediately. recomputeWorkingState below.
+            endFiring()
+        case .prominentCard, .banner:
+            dismissHandler?(track.interruption)
+        case .menuBarPulse, .soundOnly:
+            break
+        }
+    }
+
+    private func deferTrack(_ track: any ReminderTrack) {
+        let count = (deferralCounts[track.id] ?? 0) + 1
+        if count > maxDeferrals {
+            deferralCounts[track.id] = 0
+            nextFireDates[track.id] = Date().addingTimeInterval(track.interval.seconds)
+            logger.info("dropping \(track.id) after \(self.maxDeferrals) deferrals")
             return
         }
-        let content = track.makeContent()
-        let dur = track.duration.seconds
-        setPhase(.firing(remaining: dur, content: content))
-        // Next-fire date is set in endFiring so it's always "interval after this
-        // firing actually ended" — robust to tick-timing drift.
+        deferralCounts[track.id] = count
+        nextFireDates[track.id] = Date().addingTimeInterval(preemptionDelay)
+        logger.info("deferred \(track.id) +2min (attempt \(count) of \(self.maxDeferrals))")
+    }
+
+    private func handleExpiration(trackID: String) {
+        guard let current = currentlyShowing, current.track.id == trackID else { return }
+        currentlyShowing = nil
+        logger.info("\(trackID) presentation slot freed")
     }
 
     private func endFiring() {
@@ -241,13 +324,12 @@ actor ReminderCoordinator {
            let track = tracks.first(where: { $0.id == content.trackID }) {
             nextFireDates[track.id] = Date().addingTimeInterval(track.interval.seconds)
         }
+        currentlyShowing = nil
         recomputeWorkingState()
     }
 
     private func recomputeWorkingState() {
         let now = Date()
-        // Only overlay-level tracks influence the working countdown — banners
-        // (water, etc.) are not "breaks" and don't appear in "Next break in X".
         let overlayDates = tracks
             .filter { $0.interruption == .overlay }
             .compactMap { nextFireDates[$0.id] }

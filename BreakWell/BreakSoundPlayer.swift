@@ -27,16 +27,19 @@ final class BreakSoundPlayer {
 
     private func handle(_ phase: CoordinatorPhase) {
         // Only chime for overlay-level firings; banner-level reminders bring their own sound.
-        let isFiringOverlay: Bool
+        let firingContent: ReminderContent?
         if case .firing(_, let content) = phase, content.interruption == .overlay {
-            isFiringOverlay = true
+            firingContent = content
         } else {
-            isFiringOverlay = false
+            firingContent = nil
         }
+        let isFiringOverlay = firingContent != nil
         defer { wasFiring = isFiringOverlay }
         guard settings.soundEnabled else { return }
-        if isFiringOverlay && !wasFiring {
-            NSSound(named: "Glass")?.play()
+        if let firingContent, !wasFiring {
+            // Track-specified start sound, falling back to system Glass.
+            let name = firingContent.soundName ?? "Glass"
+            NSSound(named: name)?.play()
         } else if !isFiringOverlay && wasFiring {
             NSSound(named: "Hero")?.play()
         }

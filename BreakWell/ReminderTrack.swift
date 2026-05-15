@@ -6,6 +6,18 @@ nonisolated enum InterruptionLevel: Sendable, Equatable {
     case banner          // notification banner — generic reminders
     case menuBarPulse    // subtle icon animation only
     case soundOnly       // chime, no visual
+
+    /// Higher value = more important. Used by the coordinator's `tryShow` to
+    /// resolve conflicts when two reminders try to surface at once.
+    var priority: Int {
+        switch self {
+        case .overlay: 100
+        case .prominentCard: 50
+        case .banner: 20
+        case .menuBarPulse: 10
+        case .soundOnly: 10
+        }
+    }
 }
 
 /// The user-visible content of a single reminder firing.
@@ -17,6 +29,25 @@ nonisolated struct ReminderContent: Sendable, Equatable {
     let body: String?
     let interruption: InterruptionLevel
     let duration: Duration
+    /// Optional system-sound name to play on firing start (e.g. "Glass").
+    /// Used by `BreakSoundPlayer` for overlay-level firings.
+    let soundName: String?
+
+    init(
+        trackID: String,
+        title: String,
+        body: String?,
+        interruption: InterruptionLevel,
+        duration: Duration,
+        soundName: String? = nil
+    ) {
+        self.trackID = trackID
+        self.title = title
+        self.body = body
+        self.interruption = interruption
+        self.duration = duration
+        self.soundName = soundName
+    }
 }
 
 /// One scheduled reminder track. Stateless value type — scheduling state

@@ -34,9 +34,12 @@ struct BreakWellApp: App {
         let settings = Settings()
         self.settings = settings
 
-        let eyeRest = EyeRestTrack(
+        let eyeRest = BreakTrack(
+            id: "break.eyeRest",
+            displayName: "Eye Rest",
             interval: .seconds(settings.workDuration),
-            duration: .seconds(settings.breakDuration)
+            duration: .seconds(settings.breakDuration),
+            content: .eyeRest
         )
         var initialTracks: [any ReminderTrack] = [eyeRest]
         if settings.waterEnabled {
@@ -55,7 +58,7 @@ struct BreakWellApp: App {
         let prominentCard = ProminentCardController(settings: settings, hydration: hydration)
         self.prominentCard = prominentCard
 
-        let bannerHandler: @Sendable (ReminderContent) -> Void = { content in
+        let presentHandler: @Sendable (ReminderContent) -> Void = { content in
             Task { @MainActor in
                 switch content.interruption {
                 case .banner:
@@ -76,7 +79,24 @@ struct BreakWellApp: App {
             }
         }
 
-        let coordinator = ReminderCoordinator(tracks: initialTracks, bannerHandler: bannerHandler)
+        let dismissHandler: @Sendable (InterruptionLevel) -> Void = { level in
+            Task { @MainActor in
+                switch level {
+                case .banner:
+                    floatingBanner.dismiss()
+                case .prominentCard:
+                    prominentCard.dismiss()
+                default:
+                    break
+                }
+            }
+        }
+
+        let coordinator = ReminderCoordinator(
+            tracks: initialTracks,
+            presentHandler: presentHandler,
+            dismissHandler: dismissHandler
+        )
         self.coordinator = coordinator
 
         // Suppression signals — same as phase 2.
@@ -133,9 +153,12 @@ struct BreakWellApp: App {
         self.breakSoundPlayer = breakSoundPlayer
 
         settings.onDurationsChanged = { work, breakDur in
-            let updated = EyeRestTrack(
+            let updated = BreakTrack(
+                id: "break.eyeRest",
+                displayName: "Eye Rest",
                 interval: .seconds(work),
-                duration: .seconds(breakDur)
+                duration: .seconds(breakDur),
+                content: .eyeRest
             )
             Task { await coordinator.updateTrack(updated) }
         }
@@ -265,7 +288,7 @@ struct BreakWellApp: App {
 private func iconSymbol(for trackID: String) -> String {
     switch trackID {
     case "water": return "drop.fill"
-    case "eye-rest": return "eye.fill"
+    case "break.eyeRest": return "eye.fill"
     default: return "bell.fill"
     }
 }
@@ -274,7 +297,7 @@ private func iconSymbol(for trackID: String) -> String {
 private func iconColor(for trackID: String) -> Color {
     switch trackID {
     case "water": return Color.cyan
-    case "eye-rest": return Color.indigo
+    case "break.eyeRest": return Color.indigo
     default: return Color.accentColor
     }
 }

@@ -13,7 +13,6 @@ final class ProminentCardController {
     private let settings: Settings
     private let hydration: HydrationState
     private let autoDismissAfter: TimeInterval = 30
-    private let topInset: CGFloat = 36
 
     init(settings: Settings, hydration: HydrationState) {
         self.settings = settings
@@ -57,7 +56,7 @@ final class ProminentCardController {
 
         hosting.layout()
         let size = hosting.fittingSize
-        win.setFrame(topCenterFrame(size: size), display: false)
+        win.setFrame(centeredFrame(size: size), display: false)
 
         win.orderFront(nil)
         self.window = win
@@ -84,13 +83,13 @@ final class ProminentCardController {
         window = nil
     }
 
-    private func topCenterFrame(size: NSSize) -> NSRect {
+    private func centeredFrame(size: NSSize) -> NSRect {
         guard let screen = NSScreen.main else {
             return NSRect(origin: .zero, size: size)
         }
         let frame = screen.visibleFrame
         let x = frame.midX - size.width / 2
-        let y = frame.maxY - size.height - topInset
+        let y = frame.midY - size.height / 2
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 

@@ -5,12 +5,14 @@ import Foundation
 @MainActor
 final class OverlayPresenter {
     private let coordinator: ReminderCoordinator
+    private let breakContent: BreakContent
     private let controller: BreakOverlayController
     private var observationTask: Task<Void, Never>?
     private var isShowing = false
 
-    init(coordinator: ReminderCoordinator) {
+    init(coordinator: ReminderCoordinator, breakContent: BreakContent = .eyeRest) {
         self.coordinator = coordinator
+        self.breakContent = breakContent
         self.controller = BreakOverlayController(
             onSkip: {
                 Task { await coordinator.skipBreak() }
@@ -38,7 +40,11 @@ final class OverlayPresenter {
             if isShowing {
                 controller.update(remaining: remaining)
             } else {
-                controller.show(remaining: remaining, message: BreakMessages.random())
+                controller.show(
+                    remaining: remaining,
+                    content: breakContent,
+                    message: breakContent.randomMessage()
+                )
                 isShowing = true
             }
         default:

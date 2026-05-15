@@ -151,13 +151,13 @@ final class PreBreakNotifier {
                 Task { await coordinator.takeBreakNow() }
             }),
             .init(label: "+1m", isPrimary: false, handler: { [coordinator] in
-                Task { await coordinator.postponeFire(trackID: "eye-rest", by: 60) }
+                Task { await coordinator.postponeFire(trackID: "break.eyeRest", by: 60) }
             }),
             .init(label: "+5m", isPrimary: false, handler: { [coordinator] in
-                Task { await coordinator.postponeFire(trackID: "eye-rest", by: 300) }
+                Task { await coordinator.postponeFire(trackID: "break.eyeRest", by: 300) }
             }),
             .init(label: "+15m", isPrimary: false, handler: { [coordinator] in
-                Task { await coordinator.postponeFire(trackID: "eye-rest", by: 900) }
+                Task { await coordinator.postponeFire(trackID: "break.eyeRest", by: 900) }
             })
         ]
     }

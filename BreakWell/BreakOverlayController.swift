@@ -21,8 +21,9 @@ final class BreakOverlayController {
         self.onExtend = onExtend
     }
 
-    func show(remaining: TimeInterval, message: BreakMessage) {
+    func show(remaining: TimeInterval, content: BreakContent, message: BreakMessage) {
         state.remaining = remaining
+        state.content = content
         state.title = message.title
         state.message = message.description
         isShowing = true
@@ -163,6 +164,9 @@ final class BreakOverlayState {
     var remaining: TimeInterval = 0
     var title: String = ""
     var message: String = ""
+    /// Presentation metadata for the currently-firing break. Defaults to
+    /// eye-rest so the state object has a sensible value at construction.
+    var content: BreakContent = .eyeRest
 }
 
 private final class OverlayWindow: NSWindow {
