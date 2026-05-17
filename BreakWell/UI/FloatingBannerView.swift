@@ -324,9 +324,11 @@ private struct BannerActionButton: View {
 
     private var fillColor: Color {
         if action.isPrimary {
-            // Slight tone-down on the accent — barely darker than the icon hue.
-            let base = accentColor.darkened(by: 0.10)
-            return base.opacity(hovering ? 1.0 : 0.94)
+            // Fill with the full accent color so the primary button pops.
+            // (Earlier versions darkened slightly to tone down vivid pink;
+            // with the current warm-honey accent, darkening just turns the
+            // button muddy brown — keep the saturation.)
+            return accentColor.opacity(hovering ? 1.0 : 0.96)
         }
         return Color.primary.opacity(hovering ? 0.08 : 0.0)
     }
@@ -374,9 +376,14 @@ private struct BannerCloseButton: View {
     }
 }
 
-/// Pink-peach clock badge whose hand rotates significantly each second.
-/// Used only by the pre-break heads-up so the user gets a visual "the
-/// countdown is alive" cue alongside the numeric timer.
+/// Warm honey-amber clock badge whose hand rotates each second. Used only
+/// by the pre-break heads-up so the user gets a visual "the countdown is
+/// alive" cue alongside the numeric timer.
+///
+/// Palette: the earlier pink-peach gradient read as alarm/warning (the
+/// "look away NOW" vibe of an eye-rest app). Swapped to warm honey → soft
+/// amber-cream, which keeps the warmth and visibility but loses the
+/// "danger" association — more "cup of tea about to brew" than "alert."
 private struct AnimatedClockIcon: View {
     let tint: Color
     let size: CGFloat
@@ -385,15 +392,16 @@ private struct AnimatedClockIcon: View {
     private let tickInterval: TimeInterval = 1
     private let degreesPerTick: Double = 30
 
+    /// Soft cream end-stop for the badge gradient. Pairs with the warm
+    /// honey `tint` color passed in by the caller.
+    private let gradientEnd = Color(red: 1.0, green: 0.86, blue: 0.62)
+
     var body: some View {
         ZStack {
             Circle()
                 .fill(
                     LinearGradient(
-                        colors: [
-                            tint,
-                            Color(red: 1.0, green: 0.68, blue: 0.55)
-                        ],
+                        colors: [tint, gradientEnd],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )

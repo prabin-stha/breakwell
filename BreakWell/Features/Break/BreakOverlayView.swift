@@ -316,24 +316,34 @@ struct AuroraBackground: View {
             let t = timeline.date.timeIntervalSinceReferenceDate
             GeometryReader { geo in
                 ZStack {
-                    Color(red: 0.07, green: 0.05, blue: 0.09)
+                    // Deep warm-cocoa base. Earlier versions used a near-
+                    // black plum; that combined with saturated red/magenta
+                    // blobs gave the overlay a "warning" tone. Cocoa keeps
+                    // the screen calm + warm.
+                    Color(red: 0.08, green: 0.06, blue: 0.05)
 
-                    blob(Color(red: 0.55, green: 0.20, blue: 0.20),
+                    // Soft sage — calm, restful, "step outside" energy.
+                    blob(Color(red: 0.30, green: 0.55, blue: 0.42),
                          baseX: 0.22, baseY: 0.30,
                          phase: t * 0.10, ampX: 0.10, ampY: 0.08,
-                         scale: 1.4, opacity: 0.55, size: geo.size)
+                         scale: 1.4, opacity: 0.50, size: geo.size)
 
-                    blob(Color(red: 0.50, green: 0.40, blue: 0.18),
+                    // Warm honey — the only "alert-ish" hue, kept gentle.
+                    blob(Color(red: 0.78, green: 0.55, blue: 0.22),
                          baseX: 0.82, baseY: 0.38,
                          phase: t * 0.08 + 1.0, ampX: 0.10, ampY: 0.10,
-                         scale: 1.3, opacity: 0.50, size: geo.size)
+                         scale: 1.3, opacity: 0.48, size: geo.size)
 
-                    blob(Color(red: 0.60, green: 0.28, blue: 0.48),
+                    // Coffee-cream peach — the "cup of tea" mid-tone.
+                    blob(Color(red: 0.78, green: 0.50, blue: 0.36),
                          baseX: 0.45, baseY: 0.75,
                          phase: t * 0.09 + 2.5, ampX: 0.14, ampY: 0.10,
-                         scale: 1.5, opacity: 0.58, size: geo.size)
+                         scale: 1.5, opacity: 0.52, size: geo.size)
 
-                    blob(Color(red: 0.30, green: 0.16, blue: 0.34),
+                    // Deep teal — anchors the palette so it doesn't drift
+                    // entirely warm and feel like a sunset (which can read
+                    // as "end of day / urgency").
+                    blob(Color(red: 0.18, green: 0.36, blue: 0.40),
                          baseX: 0.68, baseY: 0.70,
                          phase: t * 0.07 + 4.0, ampX: 0.10, ampY: 0.12,
                          scale: 1.2, opacity: 0.45, size: geo.size)

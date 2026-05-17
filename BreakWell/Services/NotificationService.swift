@@ -144,8 +144,10 @@ final class PreBreakNotifier {
         let state = FloatingBannerState(
             title: formatMMSS(initialRemaining),
             body: "Your break starts shortly.",
-            // Pinkish clock — distinct from the cyan hydration palette.
-            icon: .clock(color: Color(red: 1.0, green: 0.55, blue: 0.65)),
+            // Warm honey-amber — friendlier than the earlier pink, which
+            // read as "alert / look-away". Reads as "tea is brewing,"
+            // matching the cup-and-saucer iconography elsewhere in the app.
+            icon: .clock(color: Color(red: 0.95, green: 0.66, blue: 0.30)),
             prominence: .prominent,
             actions: makeActions()
         )
