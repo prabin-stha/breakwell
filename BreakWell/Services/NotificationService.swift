@@ -91,6 +91,49 @@ final class PreBreakNotifier {
     /// Show the heads-up when this many seconds remain in the work interval.
     private let headsUpThreshold: TimeInterval = 30
 
+    /// Body-copy variants for the heads-up. Each banner picks one at
+    /// random when it appears, so the user doesn't read the same prompt
+    /// every cycle. All share a structure (prefix → italic emphasis →
+    /// suffix) so the editorial layout's accent phrase stays consistent.
+    ///
+    /// Tone notes: calm, observational, slightly literary. No exclamation
+    /// marks. No clock-related metaphors (we already have the clock icon
+    /// and timer doing that work). The italic phrase is always something
+    /// concrete the user could do or notice — never the verb of pausing
+    /// itself.
+    private static let messagePool: [HeadsUpMessage] = [
+        .init(prefix: "The clock's almost up. Step ",
+              emphasis: "away from the work",
+              suffix: " — and meet it back here in a few minutes."),
+        .init(prefix: "Almost time to pause. Let the screen ",
+              emphasis: "fade for a few",
+              suffix: " — your work will keep without you."),
+        .init(prefix: "A pause is coming. Stand up, ",
+              emphasis: "stretch your shoulders",
+              suffix: " — the keyboard will wait."),
+        .init(prefix: "Almost. Take a ",
+              emphasis: "deep slow breath",
+              suffix: " — and come back to yourself for a few minutes."),
+        .init(prefix: "The break is near. Walk to ",
+              emphasis: "anywhere but here",
+              suffix: " — fresh air, fresh kettle, fresh window."),
+        .init(prefix: "Your pause is on its way. Let the work ",
+              emphasis: "settle without you",
+              suffix: " — five minutes won't unmake it."),
+        .init(prefix: "A small break, soon. Stand, ",
+              emphasis: "roll your shoulders back",
+              suffix: " — and let the screen forget you."),
+        .init(prefix: "Break incoming. Let ",
+              emphasis: "something else",
+              suffix: " hold your attention — kettle, window, kitchen, sky."),
+        .init(prefix: "Almost here. Let your hands ",
+              emphasis: "fall away from the keys",
+              suffix: " — and your thoughts follow."),
+        .init(prefix: "Soon. Push ",
+              emphasis: "back from the desk",
+              suffix: " — and let the world come back into focus.")
+    ]
+
     init(coordinator: ReminderCoordinator, settings: Settings, engine: SuppressionEngine, banner: FloatingBannerController) {
         self.coordinator = coordinator
         self.settings = settings
@@ -121,11 +164,14 @@ final class PreBreakNotifier {
                 firedThisCycle = false
             } else if remaining > 0 {
                 if let state = bannerState {
-                    // Already showing — just update the countdown. We
-                    // deliberately don't dismiss when suppression toggles
-                    // mid-window: window switches to Slack/Zoom etc. would
-                    // otherwise kill the banner and it wouldn't come back.
-                    state.title = formatMMSS(remaining)
+                    // Already showing — update the countdown text only.
+                    // `title` is a static header ("A SMALL PAUSE") in the
+                    // editorial layout; the live timer goes on a separate
+                    // field. We deliberately don't dismiss when suppression
+                    // toggles mid-window: window switches to Slack/Zoom etc.
+                    // would otherwise kill the banner and it wouldn't come
+                    // back.
+                    state.timer = formatShortTime(remaining)
                 } else if !firedThisCycle && settings.preBreakNotification && !engine.state.isActive {
                     firedThisCycle = true
                     showBanner(initialRemaining: remaining)
@@ -141,20 +187,29 @@ final class PreBreakNotifier {
     }
 
     private func showBanner(initialRemaining: TimeInterval) {
+        // Pick a fresh body message once per banner appearance — picking
+        // per tick would shuffle the text mid-read.
+        let message = Self.messagePool.randomElement() ?? .defaultMessage
         let state = FloatingBannerState(
-            title: formatMMSS(initialRemaining),
-            body: "Your break starts shortly.",
-            // Warm honey-amber — friendlier than the earlier pink, which
-            // read as "alert / look-away". Reads as "tea is brewing,"
-            // matching the cup-and-saucer iconography elsewhere in the app.
-            icon: .clock(color: Color(red: 0.95, green: 0.66, blue: 0.30)),
+            // Static header label in the editorial layout.
+            title: "A small pause",
+            body: nil,
             prominence: .prominent,
-            actions: makeActions()
+            actions: makeActions(),
+            timer: formatShortTime(initialRemaining),
+            bodyMessage: message
         )
         bannerState = state
         // 0 = no auto-dismiss; lifecycle is managed from the phase stream
         // above. We dismiss when remaining hits 0 (transition to .firing).
         banner.show(state, autoDismissAfter: 0)
+    }
+
+    /// "0:08" / "1:23" — minutes:seconds with no leading zero on the
+    /// minute. Matches the editorial layout's `starts in 0:08` style.
+    private func formatShortTime(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded(.up)))
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
     }
 
     private func dismissBanner() {
@@ -172,24 +227,18 @@ final class PreBreakNotifier {
     /// snooze story that matters; five minutes covers it.
     private func makeActions() -> [FloatingBannerState.Action] {
         [
-            .init(label: "Start break now", isPrimary: true, handler: { [coordinator] in
+            // Lowercase + serif-friendly copy to match the editorial layout.
+            .init(label: "Begin now", isPrimary: true, handler: { [coordinator] in
                 Task { await coordinator.takeBreakNow() }
             }),
             // TrackID hard-coded to "break.short" because this notifier is
             // short-break-specific (the only track that gets a heads-up).
             // When the long-break track ships, it won't surface a heads-up
             // — long breaks are intentional, not interruptive.
-            .init(label: "Snooze 5m", isPrimary: false, handler: { [coordinator] in
+            .init(label: "snooze 5m", isPrimary: false, handler: { [coordinator] in
                 Task { await coordinator.postponeFire(trackID: "break.short", by: 300) }
             })
         ]
     }
 
-    /// "MM:SS" zero-padded. Pre-break window is at most 30 s in practice,
-    /// but the formatter still handles the full minute range cleanly if
-    /// the threshold is bumped up later.
-    private func formatMMSS(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds.rounded(.up)))
-        return String(format: "%02d:%02d", total / 60, total % 60)
-    }
 }

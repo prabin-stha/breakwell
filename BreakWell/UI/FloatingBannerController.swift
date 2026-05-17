@@ -50,9 +50,9 @@ import SwiftUI
 /// ```swift
 /// let banner = FloatingBannerController()
 /// let state = FloatingBannerState(
-///     title: "Time for a sip of water",
-///     body: "Stay hydrated.",
-///     icon: .symbol(name: "drop.fill", color: .cyan)
+///     title: "A small pause",
+///     prominence: .prominent,
+///     timer: "0:30"
 /// )
 /// banner.show(state)            // auto-dismisses after 8 seconds
 /// banner.show(state, autoDismissAfter: 0) // stays until banner.dismiss()
