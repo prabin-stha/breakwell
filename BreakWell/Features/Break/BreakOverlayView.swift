@@ -44,8 +44,10 @@ import AppKit
 struct BreakOverlayView: View {
     let state: BreakOverlayState
     let onSkip: () -> Void
-    /// Argument is seconds. Caller dismisses the break and reschedules the
-    /// next firing N seconds from now (not "current scheduled time + N").
+    /// Snooze: dismiss the current break, drop a snoozed-reminder marker
+    /// (so the floating indicator appears), and reschedule the next firing
+    /// for `seconds` from now. Three buttons (+5/+10/+15 min) call this
+    /// with 300/600/900.
     let onSnooze: (TimeInterval) -> Void
 
     @State private var visible = false
@@ -116,11 +118,17 @@ struct BreakOverlayView: View {
                 OverlayCapsuleButton(label: "Skip break", prominent: true) {
                     onSkip()
                 }
-                // Snooze is a single text-styled action, not a capsule —
-                // visual weight matches "Skip" being the primary choice
-                // and snooze being the lighter alternative.
-                SnoozeTextButton(label: "+ 5 min · snooze") {
-                    onSnooze(300)
+                // Snooze group — "Snooze for" label + three time-shifted
+                // options. Each drops a marker AND reschedules the next
+                // firing for that exact offset from now, so the indicator
+                // stays visible for the requested window.
+                HStack(spacing: 6) {
+                    Text("Snooze for")
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.6))
+                    SnoozeTextButton(label: "+5m") { onSnooze(300) }
+                    SnoozeTextButton(label: "+10m") { onSnooze(600) }
+                    SnoozeTextButton(label: "+15m") { onSnooze(900) }
                 }
             }
 

@@ -62,13 +62,17 @@ final class FloatingBannerController {
     private var window: BannerWindow?
     private var dismissTask: Task<Void, Never>?
     private var activationObserver: NSObjectProtocol?
+    /// `true` while a fade-out is mid-flight. If `show(...)` lands during
+    /// the fade, we cancel the teardown so the window stays alive and the
+    /// new content fades back in instead of snapping.
+    private var pendingTeardown: Bool = false
     /// Currently-shown state. Callers can keep their own reference and
     /// mutate it to live-update the banner (e.g. countdown title).
     private(set) var currentState: FloatingBannerState?
 
     private let topInset: CGFloat = 36
     private let minWidth: CGFloat = 260
-    private let maxWidth: CGFloat = 700
+    private let maxWidth: CGFloat = 720
 
     /// Show the banner. Caller retains the state object and can mutate it
     /// to update the title (live countdowns) or swap actions on the fly —
@@ -79,6 +83,11 @@ final class FloatingBannerController {
     /// responsible for calling `dismiss()`.
     func show(_ state: FloatingBannerState, autoDismissAfter: TimeInterval = 8) {
         dismissTask?.cancel()
+        // Cancel any pending fade-out teardown — the window (if still up)
+        // would otherwise be torn down by the in-flight animation's
+        // completion handler. We're replacing its content anyway, so just
+        // hard-replace and let the new window fade in from zero.
+        pendingTeardown = false
         if let existing = window {
             existing.orderOut(nil)
             window = nil
@@ -131,9 +140,18 @@ final class FloatingBannerController {
         let height = max(fitting.height, 60)
         win.setFrame(topCenterFrame(width: width, height: height), display: false)
 
+        // Fade in: start transparent before orderFront to avoid a one-frame
+        // opaque flash, then animate to fully opaque.
+        win.alphaValue = 0
         win.orderFront(nil)
         self.window = win
         installActivationObserver()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            win.animator().alphaValue = 1
+        }
 
         guard autoDismissAfter > 0 else { return }
         let delay = autoDismissAfter
@@ -150,9 +168,25 @@ final class FloatingBannerController {
         dismissTask?.cancel()
         dismissTask = nil
         currentState = nil
+        guard let panel = window else { return }
+        // Drop the observer up front so a focus change during the fade
+        // doesn't yank the dimming window back to full alpha.
         removeActivationObserver()
-        window?.orderOut(nil)
-        window = nil
+        pendingTeardown = true
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.pendingTeardown else { return }
+                self.pendingTeardown = false
+                panel.orderOut(nil)
+                if self.window === panel {
+                    self.window = nil
+                }
+            }
+        })
     }
 
     // MARK: - Re-assert front on app activation

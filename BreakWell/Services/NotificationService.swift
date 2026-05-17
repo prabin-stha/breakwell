@@ -84,12 +84,26 @@ final class PreBreakNotifier {
     /// Currently-shown banner state. Holding a reference lets us mutate
     /// `title` to update the live countdown without rebuilding the view.
     private var bannerState: FloatingBannerState?
-    /// One-shot guard so we only fire once per cycle, not on every tick
-    /// inside the threshold window.
-    private var firedThisCycle = false
+
+    /// Previous tick's `remaining` value, used to detect the precise tick
+    /// that crosses the heads-up threshold. Without this, the heads-up
+    /// fires whenever `remaining ≤ threshold` is observed — which means
+    /// any phase-stream delay (sleep/wake, suppression-clear in the
+    /// middle of the window) could trigger a late banner that confuses
+    /// the user. With crossing detection, the heads-up fires *only* on
+    /// the exact tick that crosses from above to below — or not at all
+    /// this cycle.
+    private var lastSeenRemaining: TimeInterval?
 
     /// Show the heads-up when this many seconds remain in the work interval.
     private let headsUpThreshold: TimeInterval = 30
+
+    /// Fires `(true)` when the banner becomes visible and `(false)` when
+    /// it's dismissed. BreakWellApp wires this to the snooze indicator's
+    /// `setOccluded(_:)` so the floating circle hides while the heads-up
+    /// is on screen — two "break is pending" surfaces at once would be
+    /// noisy.
+    var onVisibilityChange: ((Bool) -> Void)?
 
     /// Body-copy variants for the heads-up. Each banner picks one at
     /// random when it appears, so the user doesn't read the same prompt
@@ -156,33 +170,44 @@ final class PreBreakNotifier {
     private func handle(_ phase: CoordinatorPhase) {
         switch phase {
         case .working(let remaining):
+            // Threshold-crossing: did this tick move from above the
+            // threshold to at-or-below? Treat the first tick after a
+            // reset (lastSeenRemaining == nil) as crossing from infinity,
+            // so opening the app inside the 30-sec window still shows
+            // the heads-up.
+            let previous = lastSeenRemaining ?? .infinity
+            let justCrossed = previous > headsUpThreshold && remaining <= headsUpThreshold
+            lastSeenRemaining = remaining
+
+            // Update the live countdown if the banner is already showing.
+            // We deliberately keep updating even if suppression toggles
+            // mid-window — window switches to Slack / Zoom would otherwise
+            // kill the banner and it wouldn't come back.
+            if let state = bannerState, remaining > 0 {
+                state.timer = formatShortTime(remaining)
+            }
+
             if remaining > headsUpThreshold {
-                // Above threshold: ensure no banner is showing and reset
-                // the per-cycle guard. The next time we drop into the
-                // window, we'll fire fresh.
+                // Above threshold: ensure no banner is left visible from
+                // a previous cycle.
                 dismissBanner()
-                firedThisCycle = false
-            } else if remaining > 0 {
-                if let state = bannerState {
-                    // Already showing — update the countdown text only.
-                    // `title` is a static header ("A SMALL PAUSE") in the
-                    // editorial layout; the live timer goes on a separate
-                    // field. We deliberately don't dismiss when suppression
-                    // toggles mid-window: window switches to Slack/Zoom etc.
-                    // would otherwise kill the banner and it wouldn't come
-                    // back.
-                    state.timer = formatShortTime(remaining)
-                } else if !firedThisCycle && settings.preBreakNotification && !engine.state.isActive {
-                    firedThisCycle = true
-                    showBanner(initialRemaining: remaining)
-                }
+            } else if justCrossed && bannerState == nil && remaining > 0 && settings.preBreakNotification {
+                // Fire on the exact crossing tick. If we missed it
+                // (e.g. the previous tick was already below threshold),
+                // skip this cycle entirely — showing a "30-second
+                // warning" with only 10 seconds left is jarring. The
+                // suppression engine no longer gates this: the heads-up
+                // is informational, the actual *break* is what gets
+                // deferred when suppressed, and surfacing the upcoming
+                // pause during a meeting is still useful.
+                showBanner(initialRemaining: remaining)
             }
         case .firing, .deferred:
             // Either the break started or got deferred — no more heads-up
-            // needed. Resetting `firedThisCycle` here lets the next work
-            // interval show it again.
+            // needed. Reset `lastSeenRemaining` so the next .working cycle
+            // gets a clean "from infinity" crossing detection.
             dismissBanner()
-            firedThisCycle = false
+            lastSeenRemaining = nil
         }
     }
 
@@ -203,6 +228,7 @@ final class PreBreakNotifier {
         // 0 = no auto-dismiss; lifecycle is managed from the phase stream
         // above. We dismiss when remaining hits 0 (transition to .firing).
         banner.show(state, autoDismissAfter: 0)
+        onVisibilityChange?(true)
     }
 
     /// "0:08" / "1:23" — minutes:seconds with no leading zero on the
@@ -216,6 +242,7 @@ final class PreBreakNotifier {
         guard bannerState != nil else { return }
         bannerState = nil
         banner.dismiss()
+        onVisibilityChange?(false)
     }
 
     /// Build the two action buttons. Each fires a fire-and-forget Task
@@ -226,18 +253,28 @@ final class PreBreakNotifier {
     /// like analysis paralysis. "Let me finish my sentence" is the only
     /// snooze story that matters; five minutes covers it.
     private func makeActions() -> [FloatingBannerState.Action] {
-        [
+        // Snooze options match the overlay's three buttons (+5/+10/+15)
+        // for consistency — same affordances at both entry points. Each
+        // postpones the imminent firing by N min AND drops a persistent
+        // marker via the coordinator's combined `snooze(...:postponeBy:)`.
+        func snoozeAction(label: String, seconds: TimeInterval) -> FloatingBannerState.Action {
+            .init(label: label, isPrimary: false, handler: { [coordinator] in
+                Task {
+                    await coordinator.snooze(
+                        trackId: "break.short",
+                        postponeBy: seconds
+                    )
+                }
+            })
+        }
+        return [
             // Lowercase + serif-friendly copy to match the editorial layout.
             .init(label: "Begin now", isPrimary: true, handler: { [coordinator] in
                 Task { await coordinator.takeBreakNow() }
             }),
-            // TrackID hard-coded to "break.short" because this notifier is
-            // short-break-specific (the only track that gets a heads-up).
-            // When the long-break track ships, it won't surface a heads-up
-            // — long breaks are intentional, not interruptive.
-            .init(label: "snooze 5m", isPrimary: false, handler: { [coordinator] in
-                Task { await coordinator.postponeFire(trackID: "break.short", by: 300) }
-            })
+            snoozeAction(label: "+5m", seconds: 300),
+            snoozeAction(label: "+10m", seconds: 600),
+            snoozeAction(label: "+15m", seconds: 900)
         ]
     }
 

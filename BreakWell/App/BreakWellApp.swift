@@ -72,6 +72,7 @@ struct BreakWellApp: App {
     private let loginItemService: LoginItemService
     private let breakSoundPlayer: BreakSoundPlayer
     private let floatingBanner: FloatingBannerController
+    private let snoozeIndicator: SnoozeIndicatorController
     private let breakStats: BreakStats
 
     init() {
@@ -159,6 +160,22 @@ struct BreakWellApp: App {
         let overlayPresenter = OverlayPresenter(coordinator: coordinator)
         self.overlayPresenter = overlayPresenter
 
+        // Persistent indicator for snoozed breaks. The controller is
+        // dumb — it shows when told and forwards click / right-click
+        // actions back through these closures. The actual state (which
+        // tracks are snoozed) is owned by the coordinator; we subscribe
+        // to its `snoozedRemindersStream()` further down to drive
+        // show/dismiss.
+        let snoozeIndicator = SnoozeIndicatorController(
+            onTake: { trackID in
+                Task { await coordinator.takeSnoozedBreak(trackId: trackID) }
+            },
+            onCancel: { trackID in
+                Task { await coordinator.clearSnooze(trackId: trackID) }
+            }
+        )
+        self.snoozeIndicator = snoozeIndicator
+
         self.notificationService = notificationService
 
         let preBreakNotifier = PreBreakNotifier(
@@ -167,6 +184,14 @@ struct BreakWellApp: App {
             engine: suppressionEngine,
             banner: floatingBanner
         )
+        // Heads-up visibility → snooze indicator occlusion. When the
+        // heads-up appears, hide the floating circle (two "break is
+        // coming" surfaces at once would be noisy). When the heads-up
+        // dismisses, the indicator re-appears if a snooze is still
+        // active (occluded back to false → applyVisibility re-renders).
+        preBreakNotifier.onVisibilityChange = { visible in
+            snoozeIndicator.setOccluded(visible)
+        }
         self.preBreakNotifier = preBreakNotifier
 
         let loginItemService = LoginItemService()
@@ -242,6 +267,25 @@ struct BreakWellApp: App {
             let stream = await coordinator.completionStream()
             for await trackID in stream where trackID.hasPrefix("break.") {
                 breakStats.recordCompletion()
+            }
+        }
+
+        // Bridge coordinator → snooze indicator: show the floating button
+        // whenever a break-track snooze is active, hide it otherwise.
+        // The stream emits the full list each time, so we just look at
+        // the first matching entry (typically only one — water etc.
+        // wouldn't get an indicator even if they were snoozed). The full
+        // reminder is passed through so the indicator can compute its
+        // progress ring from `snoozedAt` / `nextFireAt`.
+        Task { @MainActor in
+            let stream = await coordinator.snoozedRemindersStream()
+            for await snoozed in stream {
+                let breakSnooze = snoozed.first { $0.trackId.hasPrefix("break.") }
+                if let breakSnooze {
+                    snoozeIndicator.show(reminder: breakSnooze)
+                } else {
+                    snoozeIndicator.dismiss()
+                }
             }
         }
 

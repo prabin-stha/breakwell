@@ -59,6 +59,33 @@ nonisolated enum CoordinatorPhase: Sendable, Equatable {
     case deferred(since: Date, content: ReminderContent)
 }
 
+/// A break that the user chose to "snooze" (deferred without rescheduling
+/// the next firing). Conceptually: "I see the break, not right now, leave
+/// a marker so I can take it on my own terms."
+///
+/// Lifecycle:
+///   - Created when `ReminderCoordinator.snooze(trackId:)` is called
+///   - Cleared when the user either takes the break (via
+///     `takeSnoozedBreak(trackId:)`) or explicitly cancels it (via
+///     `clearSnooze(trackId:)`)
+///   - Also auto-cleared when the same track fires naturally — the new
+///     firing supersedes the snoozed marker (the user is being asked
+///     again anyway)
+///   - NOT persisted across app restarts: a stale snooze from yesterday
+///     would feel buggy
+nonisolated struct SnoozedReminder: Equatable, Sendable {
+    let trackId: String
+    let snoozedAt: Date
+    /// The break duration that *would* have run if the user took it.
+    /// Stored on the snoozed marker so the indicator UI (and any future
+    /// "take snoozed break" path) doesn't have to look the track up.
+    let originalDuration: Duration
+    /// When the next firing for this track is currently scheduled. The
+    /// indicator uses this to draw a circular progress ring showing time
+    /// until the break re-fires — `(now - snoozedAt) / (nextFireAt - snoozedAt)`.
+    let nextFireAt: Date
+}
+
 /// Owns one or more `ReminderTrack`s and is the single source of truth for
 /// "what should be on screen right now."
 ///
@@ -112,6 +139,16 @@ actor ReminderCoordinator {
     /// preempt). Used by stat counters that want to track completed
     /// breaks, not initiated ones.
     private var completionContinuations: [UUID: AsyncStream<String>.Continuation] = [:]
+    /// Snapshots of `snoozedReminders` published whenever the list
+    /// changes. UI layers subscribe to drive a persistent "break pending"
+    /// indicator without polling.
+    private var snoozeContinuations: [UUID: AsyncStream<[SnoozedReminder]>.Continuation] = [:]
+
+    /// Breaks the user has snoozed and not yet taken or cancelled.
+    /// `private(set)` so external readers can snapshot the current list
+    /// across the actor boundary; mutation only happens through the
+    /// `snooze` / `takeSnoozedBreak` / `clearSnooze` methods.
+    private(set) var snoozedReminders: [SnoozedReminder] = []
 
     private var isSuppressed = false
     private var deferredFireAt: Date?
@@ -199,27 +236,9 @@ actor ReminderCoordinator {
         logger.info("track \(track.id) updated: interval=\(Int(track.interval.seconds))s duration=\(Int(track.duration.seconds))s")
     }
 
-    /// Dismiss the currently-firing break and schedule the next firing of
-    /// that track to occur `seconds` from now. The break overlay's
-    /// "Snooze N min" buttons call this — semantically "I can't break right
-    /// now, ask me again in N minutes." Differs from `postponeFire` (which
-    /// pushes the *scheduled* next-fire later) because we need to override
-    /// the next-fire date that `endFiring` would otherwise reset to a full
-    /// interval from now.
-    func snoozeCurrentBreak(by seconds: TimeInterval) {
-        guard case .firing(_, let content) = phase else { return }
-        let trackID = content.trackID
-        // Replicate endFiring's bookkeeping but override the schedule —
-        // we don't want a full work-interval delay here, just `seconds`.
-        deferredFireAt = nil
-        currentlyShowing = nil
-        nextFireDates[trackID] = Date().addingTimeInterval(seconds)
-        recomputeWorkingState()
-        logger.info("snoozed \(trackID) by \(Int(seconds))s")
-    }
-
     /// Push a track's next firing further into the future. Used by the
-    /// pre-break heads-up's snooze button.
+    /// pre-break heads-up's snooze button (in tandem with `snooze` so the
+    /// imminent firing doesn't immediately supersede the snooze marker).
     func postponeFire(trackID: String, by seconds: TimeInterval) {
         guard let current = nextFireDates[trackID] else { return }
         nextFireDates[trackID] = current.addingTimeInterval(seconds)
@@ -256,6 +275,98 @@ actor ReminderCoordinator {
         if case .firing = phase {
             endFiring()
         }
+    }
+
+    // MARK: - Snooze (defer with persistent indicator)
+
+    /// Dismiss the currently-firing break for `trackId` and record a
+    /// `SnoozedReminder` so the UI can show a persistent "break pending"
+    /// indicator.
+    ///
+    /// - Parameters:
+    ///   - trackId: which track the snooze applies to.
+    ///   - postponeBy: optional override for the next-fire date. When
+    ///     supplied, the next firing is rescheduled to `now + postponeBy`
+    ///     (this is what the overlay's "+5m / +10m / +15m" buttons want).
+    ///     When nil, the regular schedule continues unmodified — useful
+    ///     for "wait for next scheduled break" semantics.
+    ///
+    /// If a snooze already exists for the same track, it's replaced —
+    /// snoozing the "same break" twice doesn't accumulate markers.
+    func snooze(trackId: String, postponeBy seconds: TimeInterval? = nil) {
+        guard let track = tracks.first(where: { $0.id == trackId }) else { return }
+
+        let now = Date()
+
+        // If the break is currently on screen for this track, dismiss it.
+        // (The snooze command can also be invoked from the heads-up,
+        // which is before the firing — in that case there's nothing
+        // currently firing for us to clear.) `endFiring` resets
+        // `nextFireDates[trackId]` to `now + interval`, which we may
+        // overwrite below if the caller specified an explicit postpone.
+        if case .firing(_, let content) = phase, content.trackID == trackId {
+            endFiring()
+        }
+
+        // Caller-supplied postpone: place the next firing exactly
+        // `seconds` from now (overriding the auto-reschedule above).
+        if let seconds {
+            nextFireDates[trackId] = now.addingTimeInterval(seconds)
+            if case .working = phase {
+                recomputeWorkingState()
+            }
+        }
+
+        // Capture whatever next-fire date is now scheduled — could be
+        // from endFiring's auto-reschedule, the explicit postpone above,
+        // or (worst-case fallback) snoozedAt itself if neither path ran.
+        // The indicator uses this to draw its progress ring.
+        let nextFireAt = nextFireDates[trackId] ?? now
+
+        let entry = SnoozedReminder(
+            trackId: trackId,
+            snoozedAt: now,
+            originalDuration: track.duration,
+            nextFireAt: nextFireAt
+        )
+        snoozedReminders.removeAll { $0.trackId == trackId }
+        snoozedReminders.append(entry)
+        publishSnoozedReminders()
+
+        let postponeNote = seconds.map { " (refire in \(Int($0))s)" } ?? ""
+        logger.info("snoozed \(trackId)\(postponeNote)")
+    }
+
+    /// Take a previously-snoozed break right now. Removes the snooze
+    /// marker and immediately presents the break (preempting anything
+    /// currently on screen). The next-fire date is left alone — taking
+    /// the snoozed break counts as fulfilling this cycle, and `endFiring`
+    /// will reschedule normally when the break completes.
+    func takeSnoozedBreak(trackId: String) {
+        guard let track = tracks.first(where: { $0.id == trackId }) else { return }
+        guard snoozedReminders.contains(where: { $0.trackId == trackId }) else {
+            // Idempotent — if the snooze isn't there (already taken /
+            // cleared / superseded), nothing to do.
+            return
+        }
+
+        snoozedReminders.removeAll { $0.trackId == trackId }
+        publishSnoozedReminders()
+
+        if let current = currentlyShowing {
+            preempt(current.track)
+        }
+        present(track)
+        logger.info("→ took snoozed break \(trackId)")
+    }
+
+    /// Cancel a snoozed break without taking it. The indicator goes away;
+    /// the regular schedule continues uninterrupted.
+    func clearSnooze(trackId: String) {
+        guard snoozedReminders.contains(where: { $0.trackId == trackId }) else { return }
+        snoozedReminders.removeAll { $0.trackId == trackId }
+        publishSnoozedReminders()
+        logger.info("cleared snooze \(trackId)")
     }
 
     func takeDeferredBreakNow() {
@@ -328,6 +439,35 @@ actor ReminderCoordinator {
 
     private func removeCompletionContinuation(_ id: UUID) {
         completionContinuations.removeValue(forKey: id)
+    }
+
+    /// Yields the full list of currently-snoozed reminders whenever it
+    /// changes. UI layers subscribe to drive the persistent indicator(s)
+    /// without polling. The current snapshot is yielded immediately on
+    /// subscribe so newly-attached views don't sit idle until the next
+    /// mutation.
+    func snoozedRemindersStream() -> AsyncStream<[SnoozedReminder]> {
+        AsyncStream { continuation in
+            let id = UUID()
+            self.snoozeContinuations[id] = continuation
+            continuation.yield(self.snoozedReminders)
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                Task { await self.removeSnoozeContinuation(id) }
+            }
+        }
+    }
+
+    private func removeSnoozeContinuation(_ id: UUID) {
+        snoozeContinuations.removeValue(forKey: id)
+    }
+
+    /// Broadcast the current `snoozedReminders` snapshot. Called after
+    /// every mutation so subscribers stay in lockstep with the actor's
+    /// own copy.
+    private func publishSnoozedReminders() {
+        let snapshot = snoozedReminders
+        for cont in snoozeContinuations.values { cont.yield(snapshot) }
     }
 
     // MARK: - Internals
@@ -424,6 +564,16 @@ actor ReminderCoordinator {
     private func present(_ track: any ReminderTrack) {
         deferralCounts[track.id] = 0
         let presentedAt = Date()
+
+        // Any snooze marker for this track is now stale — the new firing
+        // supersedes it. `takeSnoozedBreak` removes its own entry before
+        // calling here, so the only callers that hit a non-empty match
+        // are the natural-cadence paths (tick, takeBreakNow, deferred
+        // catch-up). Broadcast only when something actually changed.
+        if snoozedReminders.contains(where: { $0.trackId == track.id }) {
+            snoozedReminders.removeAll { $0.trackId == track.id }
+            publishSnoozedReminders()
+        }
 
         switch track.interruption {
         case .overlay:

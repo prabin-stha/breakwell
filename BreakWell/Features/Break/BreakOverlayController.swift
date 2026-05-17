@@ -47,7 +47,7 @@ import SwiftUI
 /// ```swift
 /// let controller = BreakOverlayController(
 ///     onSkip: { /* end the firing */ },
-///     onSnooze: { seconds in /* dismiss + reschedule N from now */ }
+///     onSnooze: { seconds in /* dismiss, drop marker, refire in N */ }
 /// )
 /// controller.show(remaining: 20, message: ...)
 /// // ... per tick ...
@@ -60,9 +60,10 @@ final class BreakOverlayController {
     private let state = BreakOverlayState()
     /// Called when the user presses Esc twice or clicks Skip break.
     private let onSkip: () -> Void
-    /// Called when the user clicks a "Snooze N" button. Argument is
-    /// seconds; the coordinator dismisses the current break and reschedules
-    /// the next firing that many seconds from now.
+    /// Called when the user clicks one of the "Snooze +Nm" buttons.
+    /// Argument is the postpone offset in seconds (300/600/900). The
+    /// coordinator dismisses the break, drops a snoozed-reminder marker,
+    /// and reschedules the next firing for `now + seconds`.
     private let onSnooze: (TimeInterval) -> Void
     /// One window per screen.
     private var windows: [OverlayWindow] = []
@@ -71,6 +72,10 @@ final class BreakOverlayController {
     /// we can deregister later. Apple's API hands back `Any?` here.
     private var keyMonitor: Any?
     private var isShowing = false
+    /// NSApp.presentationOptions snapshot taken at show() time so we can
+    /// restore exactly what was in place before. Optional so we don't
+    /// double-snapshot if show() is called twice without a hide().
+    private var previousPresentationOptions: NSApplication.PresentationOptions?
 
     // Double-press ESC: we record the time of the most recent ESC and only
     // dismiss when a second one arrives within the window.
@@ -92,6 +97,7 @@ final class BreakOverlayController {
         // Bring our app forward so the borderless window receives key events.
         // Without this, the windows would render but ESC wouldn't reach us.
         NSApp.activate(ignoringOtherApps: true)
+        installPresentationOptions()
         installScreenChangeObserver()
         installKeyMonitor()
     }
@@ -103,6 +109,7 @@ final class BreakOverlayController {
     func hide() {
         isShowing = false
         lastEscapeAt = nil
+        restorePresentationOptions()
         removeScreenChangeObserver()
         removeKeyMonitor()
 
@@ -213,6 +220,58 @@ final class BreakOverlayController {
             NotificationCenter.default.removeObserver(screenChangeObserver)
             self.screenChangeObserver = nil
         }
+    }
+
+    // MARK: - Presentation options — block Cmd+Tab / Cmd+H / Cmd+Q
+
+    /// Lock the user into the overlay while it's showing. The window's
+    /// `.screenSaver` level covers everything visually, but it doesn't
+    /// stop the system app switcher (Cmd+Tab) — that's handled by the
+    /// kernel/loginwindow at a layer above any window level. The right
+    /// hook for that is `NSApplication.presentationOptions`, which the
+    /// app sets while it's active to opt out of process switching.
+    ///
+    /// Options used:
+    ///   - `.disableProcessSwitching`: blocks Cmd+Tab / Cmd+` so the user
+    ///     can't slip out behind the overlay.
+    ///   - `.disableHideApplication`: blocks Cmd+H, which would also
+    ///     hide the overlay along with the rest of the app.
+    ///   - `.hideDock` + `.hideMenuBar`: AppKit *requires*
+    ///     `.disableProcessSwitching` to be paired with either `.hideDock`
+    ///     or `.autoHideDock`; without one of those, assigning the option
+    ///     throws `NSInvalidArgumentException`. We pick the hide-outright
+    ///     variants (not auto-hide) because the overlay already covers the
+    ///     whole screen — the dock and menu bar would be visually behind
+    ///     the overlay anyway, so suppressing them avoids a one-frame flash
+    ///     if the user's mouse drifts into the menu-bar / dock edge.
+    ///
+    /// We deliberately do NOT add `.disableForceQuit` — the user should
+    /// always be able to bail out of the app via Cmd+Opt+Esc if something
+    /// goes wrong; the goal is gentle pressure, not entrapment.
+    ///
+    /// Quirk: `disableProcessSwitching` only takes effect while our app
+    /// is the frontmost active app. `show()` calls `NSApp.activate(...)`
+    /// before we get here, so by the time the options are assigned we are
+    /// (or are about to be) frontmost. If the user later clicks a visible
+    /// gap to another app (shouldn't be possible — the overlay covers the
+    /// whole screen rect including the menu bar area), focus would leave
+    /// us and the options would silently stop applying; they re-engage
+    /// automatically when we're frontmost again.
+    private func installPresentationOptions() {
+        guard previousPresentationOptions == nil else { return }
+        previousPresentationOptions = NSApp.presentationOptions
+        NSApp.presentationOptions = [
+            .disableProcessSwitching,
+            .disableHideApplication,
+            .hideDock,
+            .hideMenuBar
+        ]
+    }
+
+    private func restorePresentationOptions() {
+        guard let previous = previousPresentationOptions else { return }
+        NSApp.presentationOptions = previous
+        previousPresentationOptions = nil
     }
 
     // MARK: - Key handling — double-press ESC to skip

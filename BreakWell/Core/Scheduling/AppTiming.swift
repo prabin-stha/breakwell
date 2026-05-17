@@ -48,7 +48,7 @@ enum AppTiming {
     // `static let` on a caseless enum behaves like a constant in a namespace.
     // `nonisolated` so non-main-actor callers (the `ReminderCoordinator`
     // actor reads this via `minutesAsSeconds`) can access it directly.
-    nonisolated static let secondsPerMinute: TimeInterval = 60
+    nonisolated static let secondsPerMinute: TimeInterval = 1
 }
 
 /// Sugar on `Int` so call sites can read `settings.workMinutes.minutesAsSeconds`

@@ -194,60 +194,61 @@ struct FloatingBannerView: View {
 
     @State private var visible = false
 
-    // Palette tuned to the cream-paper aesthetic. All five colors derived
-    // from a warm clay/cocoa family so the card reads as a single mood.
-    /// Sole custom color in the palette. Everything else (body text,
-    /// header, timer, dividers) uses system `.primary` / `.secondary`
-    /// so the card adapts cleanly to light and dark glass. The accent is
-    /// kept as a fixed warm clay because it's the editorial signature
-    /// — the italic emphasis phrase + the "Begin now" underline. Tuned
-    /// brighter than the earlier cream-paper version so it stays readable
-    /// on dark `.regularMaterial`.
-    private let accentClay = Color(red: 0.86, green: 0.38, blue: 0.24)
+    // Single warm-peach accent carries the visual signature of the banner:
+    // hourglass icon, timer pill, italic emphasis phrase, "Begin now"
+    // pill, and the pill's soft glow. Kept bright enough to read against
+    // the dark card background while staying within a friendly tone
+    // (it's a "pause" prompt, not an alarm).
+    private let accent = Color(red: 0.98, green: 0.62, blue: 0.45)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             headerRow
                 .padding(.vertical, 11)
 
-            DashedLine()
-                .stroke(Color.secondary.opacity(0.4),
-                        style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
+            // Single hairline divider between header and body. The earlier
+            // editorial layout had dashed dividers above AND below the body;
+            // the new look uses one quiet line to separate header from
+            // content, and lets the footer sit directly under the body
+            // without a visual break (the footer's pill shapes provide their
+            // own boundary).
+            Rectangle()
+                .fill(Color.white.opacity(0.07))
                 .frame(height: 1)
 
             bodyText
-                .padding(.vertical, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            DashedLine()
-                .stroke(Color.secondary.opacity(0.4),
-                        style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
-                .frame(height: 1)
-
             footerRow
-                .padding(.vertical, 11)
+                .padding(.bottom, 14)
         }
-        .padding(.horizontal, 22)
-        // Glass background — `.regularMaterial` gets us the blur + tint
-        // that native macOS panels use. The shape itself owns the fill
-        // (rather than `.background(.regularMaterial).clipShape(...)`)
-        // so we don't get a rectangular ghost in the corners on some
-        // macOS versions.
+        .padding(.horizontal, 18)
+        // Dark card. Two layers: a deep near-black tint over `.ultraThinMaterial`
+        // so a hint of the desktop bleeds through at the edges without
+        // washing out the body copy. Filling the shape directly (rather
+        // than chaining `.background().clipShape(...)`) avoids the
+        // rectangular-ghost artifact some macOS versions render at the
+        // rounded corners.
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.regularMaterial)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color(red: 0.06, green: 0.07, blue: 0.10).opacity(0.78))
+                )
         )
-        // Subtle white gradient stroke for the "glass rim" highlight at
-        // the top edge — bright at the top, fading to barely-visible at
-        // the bottom. This is the small touch that distinguishes "frosted
-        // panel" from "flat translucent rectangle".
+        // Subtle glass-rim highlight along the top edge — same trick as
+        // the prior layout, kept because it still reads as "panel"
+        // rather than "flat rectangle".
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .strokeBorder(
                     LinearGradient(
                         colors: [
-                            .white.opacity(0.35),
-                            .white.opacity(0.05)
+                            .white.opacity(0.18),
+                            .white.opacity(0.04)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -255,16 +256,17 @@ struct FloatingBannerView: View {
                     lineWidth: 0.5
                 )
         )
-        // Shadow rendered by NSWindow.hasShadow (in FloatingBannerController)
-        // so it follows the rounded shape exactly.
-        .opacity(visible ? 1 : 0)
+        // Fade-in is owned by FloatingBannerController via NSWindow alpha
+        // animation — we keep only the slide-down here so the two effects
+        // don't compound (a SwiftUI .opacity would multiply with the
+        // NSWindow alpha, producing a slower, ease-of-easeOut curve).
         .offset(y: visible ? 0 : -14)
         .onAppear {
             withAnimation(.spring(duration: 0.4, bounce: 0.2)) {
                 visible = true
             }
         }
-        .frame(width: 460, alignment: .leading)
+        .frame(width: 440, alignment: .leading)
         .fixedSize(horizontal: true, vertical: true)
     }
 
@@ -272,156 +274,226 @@ struct FloatingBannerView: View {
 
     @ViewBuilder
     private var headerRow: some View {
-        HStack(alignment: .center) {
-            // Header label: sans-serif (system default), uses `.secondary`
-            // so the small-caps header sits one rung quieter than the
-            // body text and adapts cleanly to light/dark glass.
+        HStack(alignment: .center, spacing: 10) {
+            // SF Symbol hourglass — bottom-half-filled variant gives the
+            // two-tone look (outline frame + accent fill) without us
+            // hand-drawing the shape.
+            Image(systemName: "hourglass.bottomhalf.filled")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(accent)
+
             Text(state.title)
                 .font(.system(size: 11, weight: .medium))
                 .tracking(1.8)
                 .textCase(.uppercase)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.55))
+
             Spacer(minLength: 8)
-            // The dynamic timer. `numericText()` content transition slides
-            // the digits as they change instead of crossfading.
-            Text("starts in \(state.timer)")
-                .font(.system(size: 13, design: .serif).italic())
-                .foregroundStyle(.secondary)
+
+            timerPill
+
+            // Close X — replaces the old text "close" footer button.
+            // Hangs in the top-right where macOS users expect a dismiss
+            // affordance.
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// "Starts in 0:21" capsule with a small pulsing accent dot. The
+    /// pulse reads as a "live / in-progress" indicator — heartbeat-style
+    /// scale + opacity loop so it's noticeable without being distracting.
+    private var timerPill: some View {
+        HStack(spacing: 6) {
+            PulsingDot(color: accent, size: 4)
+            Text("Starts in \(state.timer)")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(accent)
                 .monospacedDigit()
                 .contentTransition(.numericText())
                 .animation(.default, value: state.timer)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(
+            Capsule()
+                .fill(accent.opacity(0.10))
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(accent.opacity(0.35), lineWidth: 1)
+        )
     }
 
     // MARK: - Body
 
-    /// Editorial body copy. Three segments concatenated:
-    ///   - prefix in normal serif (adaptive `.primary`)
-    ///   - emphasis in italic + clay accent (custom warm color)
-    ///   - suffix in normal serif (adaptive `.primary`)
-    /// The actual strings come from `state.bodyMessage`, which the caller
-    /// picks once when the banner is created — see the message pool in
-    /// `PreBreakNotifier`.
+    /// Three concatenated `Text` segments:
+    ///   - prefix in plain serif (white-ish)
+    ///   - emphasis in italic + warm accent
+    ///   - suffix in plain serif
+    /// Strings come from `state.bodyMessage`, picked once per banner
+    /// appearance in PreBreakNotifier.
     private var bodyText: Text {
         let bodyFont = Font.system(size: 18, weight: .regular, design: .serif)
         let msg = state.bodyMessage
         return Text(msg.prefix)
             .font(bodyFont)
-            .foregroundColor(.primary)
+            .foregroundColor(.white.opacity(0.92))
         + Text(msg.emphasis)
             .font(bodyFont.italic())
-            .foregroundColor(accentClay)
+            .foregroundColor(accent)
         + Text(msg.suffix)
             .font(bodyFont)
-            .foregroundColor(.primary)
+            .foregroundColor(.white.opacity(0.92))
     }
 
     // MARK: - Footer
 
     @ViewBuilder
     private var footerRow: some View {
-        HStack(spacing: 22) {
-            // Primary (underlined clay) — the "Begin now" affordance.
+        HStack(spacing: 12) {
             if let primary = state.actions.first(where: { $0.isPrimary }) {
-                EditorialActionButton(
-                    label: primary.label,
-                    color: accentClay,
-                    style: .primary,
-                    action: primary.handler
-                )
+                PrimaryPillButton(label: primary.label, color: accent, action: primary.handler)
             }
-            // Snooze + any other non-primary actions, sitting beside the
-            // primary one so they read as related "act on the break"
-            // options. Rendered with a softer style (italic clay) so
-            // hierarchy still favours the primary.
-            ForEach(state.actions.filter { !$0.isPrimary }) { action in
-                EditorialActionButton(
-                    label: action.label,
-                    color: accentClay,
-                    style: .alternate,
-                    action: action.handler
-                )
-            }
+            // Snooze group: a single bordered capsule grouping the three
+            // time options under a quiet "SNOOZE" label. Reads as one
+            // multi-option control rather than three loose buttons —
+            // matches the conceptual model ("pick a duration") and saves
+            // horizontal space vs spelled-out "snooze 5m" repeated thrice.
+            SnoozeGroupPill(actions: state.actions.filter { !$0.isPrimary })
             Spacer()
-            // Dismiss / "close" — close the banner without rescheduling.
-            // Wired to the same handler the controller uses for its own
-            // close, so the break still fires at its scheduled time;
-            // this just hides the heads-up.
-            EditorialActionButton(
-                label: "close",
-                color: .secondary,
-                style: .secondary,
-                action: onDismiss
-            )
         }
     }
 
 }
 
-/// Horizontal dashed line for the editorial banner's section dividers.
-/// The dash pattern is supplied by the caller via `StrokeStyle`.
-private struct DashedLine: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: 0, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.width, y: rect.midY))
-        return path
+// MARK: - Pulsing dot
+
+/// Small filled circle that breathes — scales up and dims slightly, then
+/// settles back. Used in the timer pill to signal "live countdown" at a
+/// glance. Animation autoreverses forever; SwiftUI handles the easing.
+private struct PulsingDot: View {
+    let color: Color
+    let size: CGFloat
+    @State private var pulsing = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .scaleEffect(pulsing ? 1.45 : 1.0)
+            .opacity(pulsing ? 0.55 : 1.0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    pulsing = true
+                }
+            }
     }
 }
 
-/// Text-only action button used in the editorial layout's footer.
-/// - `.primary`: underlined clay (the headline action — "Begin now")
-/// - `.alternate`: italic clay (sibling action — "snooze 5m"). Same hue
-///   family as primary but italic + no underline, so it reads as "the
-///   other thing you can do" without competing for attention.
-/// - `.secondary`: italic muted ("close" / dismiss).
-private struct EditorialActionButton: View {
-    enum Style { case primary, alternate, secondary }
+// MARK: - Footer button styles
 
+/// Solid pill button for the primary action ("Begin now"). Filled with
+/// the accent color, dark text on top, with a soft accent-colored glow
+/// underneath so it lifts off the dark card.
+private struct PrimaryPillButton: View {
     let label: String
     let color: Color
-    let style: Style
     let action: () -> Void
-
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            labelText
-                .opacity(hovering ? 0.78 : 1.0)
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.85))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule()
+                        .fill(color.opacity(hovering ? 1.0 : 0.92))
+                )
+                .shadow(color: color.opacity(hovering ? 0.55 : 0.40), radius: 11, x: 0, y: 0)
         }
         .buttonStyle(.plain)
         .onHover { value in
             hovering = value
-            if value {
-                NSCursor.pointingHand.push()
-            } else {
-                NSCursor.pop()
-            }
+            if value { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
         .onDisappear {
-            if hovering {
-                NSCursor.pop()
-                hovering = false
-            }
+            if hovering { NSCursor.pop(); hovering = false }
         }
         .animation(.easeOut(duration: 0.15), value: hovering)
     }
+}
 
-    /// `Text` chained styling so we can pick italic / underline per style
-    /// without juggling separate view branches.
-    private var labelText: Text {
-        let base = Text(label)
-            .font(.system(size: 14, weight: .regular, design: .serif))
-            .foregroundColor(color)
-        switch style {
-        case .primary:
-            return base.underline()
-        case .alternate:
-            return base.italic()
-        case .secondary:
-            return base.italic()
+/// Bordered capsule containing a quiet "SNOOZE" caption and the three
+/// time-option buttons. Strips a leading "+" from labels so callers can
+/// keep using "+5m" / "+10m" / "+15m" without us pushing presentation
+/// rules back into them.
+private struct SnoozeGroupPill: View {
+    let actions: [FloatingBannerState.Action]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Text("SNOOZE")
+                .font(.system(size: 10, weight: .medium))
+                .tracking(1.5)
+                .foregroundStyle(.white.opacity(0.40))
+                .padding(.trailing, 4)
+
+            ForEach(actions) { action in
+                SnoozeOptionButton(
+                    label: action.label.hasPrefix("+") ? String(action.label.dropFirst()) : action.label,
+                    action: action.handler
+                )
+            }
         }
+        .padding(.leading, 11)
+        .padding(.trailing, 4)
+        .padding(.vertical, 3)
+        .background(
+            Capsule()
+                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+}
+
+/// Individual time-option button inside the snooze group. Subtle hover
+/// background so the user gets click feedback even though the group
+/// container does the heavy visual work.
+private struct SnoozeOptionButton: View {
+    let label: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.white.opacity(hovering ? 1.0 : 0.82))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(hovering ? 0.08 : 0))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { value in
+            hovering = value
+            if value { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .onDisappear {
+            if hovering { NSCursor.pop(); hovering = false }
+        }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 

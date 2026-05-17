@@ -56,7 +56,17 @@ final class OverlayPresenter {
                 Task { await coordinator.skipBreak() }
             },
             onSnooze: { seconds in
-                Task { await coordinator.snoozeCurrentBreak(by: seconds) }
+                // Dismiss the firing, drop a marker so the indicator
+                // appears, AND push the next-fire exactly `seconds` from
+                // now (the user picked +5/+10/+15 explicitly). Hard-codes
+                // the trackID because OverlayPresenter is short-break-
+                // specific.
+                Task {
+                    await coordinator.snooze(
+                        trackId: "break.short",
+                        postponeBy: seconds
+                    )
+                }
             }
         )
     }
