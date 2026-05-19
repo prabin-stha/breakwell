@@ -95,6 +95,12 @@ final class PreBreakNotifier {
     /// this cycle.
     private var lastSeenRemaining: TimeInterval?
 
+    /// Mirror of the suppression engine's `isActive`. When true, the
+    /// heads-up is fully suppressed: an open banner gets torn down and
+    /// new threshold crossings don't show one. Driven by BreakWellApp's
+    /// suppression-stream subscriber via `setSuppressionActive(_:)`.
+    private var suppressionActive: Bool = false
+
     /// Show the heads-up when this many seconds remain in the work interval.
     private let headsUpThreshold: TimeInterval = 30
 
@@ -155,6 +161,19 @@ final class PreBreakNotifier {
         self.banner = banner
     }
 
+    /// Toggle suppression. When set to true, any visible banner is
+    /// dismissed immediately and future threshold crossings are ignored
+    /// until suppression clears. Idempotent.
+    func setSuppressionActive(_ value: Bool) {
+        guard value != suppressionActive else { return }
+        suppressionActive = value
+        if value {
+            // No fade — the user is in a meeting/call; the banner should
+            // just vanish, not animate.
+            dismissBannerImmediately()
+        }
+    }
+
     /// Subscribe to the coordinator's phase stream. Idempotent.
     func start() {
         guard observationTask == nil else { return }
@@ -191,22 +210,25 @@ final class PreBreakNotifier {
                 // Above threshold: ensure no banner is left visible from
                 // a previous cycle.
                 dismissBanner()
-            } else if justCrossed && bannerState == nil && remaining > 0 && settings.preBreakNotification {
+            } else if justCrossed && bannerState == nil && remaining > 0 && settings.preBreakNotification && !suppressionActive {
                 // Fire on the exact crossing tick. If we missed it
                 // (e.g. the previous tick was already below threshold),
                 // skip this cycle entirely — showing a "30-second
-                // warning" with only 10 seconds left is jarring. The
-                // suppression engine no longer gates this: the heads-up
-                // is informational, the actual *break* is what gets
-                // deferred when suppressed, and surfacing the upcoming
-                // pause during a meeting is still useful.
+                // warning" with only 10 seconds left is jarring.
+                // Suppression also gates this: during meetings / calls
+                // the user doesn't want even the informational heads-up
+                // — the break itself will defer too, so there's nothing
+                // to warn about until suppression clears.
                 showBanner(initialRemaining: remaining)
             }
         case .firing, .deferred:
             // Either the break started or got deferred — no more heads-up
-            // needed. Reset `lastSeenRemaining` so the next .working cycle
-            // gets a clean "from infinity" crossing detection.
-            dismissBanner()
+            // needed. Use the no-fade dismiss path: the overlay's content
+            // fades in over ~0.55s, and a fading-out banner would show
+            // through that semi-transparent fade. Resetting
+            // `lastSeenRemaining` here gives the next .working cycle a
+            // clean "from infinity" crossing detection.
+            dismissBannerImmediately()
             lastSeenRemaining = nil
         }
     }
@@ -242,6 +264,18 @@ final class PreBreakNotifier {
         guard bannerState != nil else { return }
         bannerState = nil
         banner.dismiss()
+        onVisibilityChange?(false)
+    }
+
+    /// Same effect as `dismissBanner` but skips the fade-out animation.
+    /// Used when the break overlay is about to take the screen — we want
+    /// the banner gone *before* the overlay's fade-in starts, otherwise
+    /// the semi-transparent overlay will reveal a fading-out banner
+    /// beneath it.
+    private func dismissBannerImmediately() {
+        guard bannerState != nil else { return }
+        bannerState = nil
+        banner.dismissImmediately()
         onVisibilityChange?(false)
     }
 

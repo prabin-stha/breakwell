@@ -50,15 +50,29 @@ final class SnoozeIndicatorController {
     /// and the window stays alive for the new fade-in.
     private var pendingTeardown: Bool = false
 
-    // `show(reminder:)` and `setOccluded(_:)` are two independent signals
-    // that combine to decide whether the panel is on screen. Splitting
-    // intent (which snoozed reminder would we show?) from rendered state
-    // (is the panel actually visible right now?) lets callers control
-    // the two sides separately — BreakWellApp drives `pendingReminder`
-    // from the coordinator's snoozedRemindersStream, and `occluded` from
-    // the heads-up's visibility callback.
+    // Three independent signals combine to decide whether the panel is on
+    // screen:
+    //   - `pendingReminder`: intent — there is a snoozed break waiting.
+    //   - `headsUpOccluded`: the pre-break heads-up is on screen, so we
+    //     hide to avoid two stacked "break is pending" surfaces.
+    //   - `suppressionActive`: the user is in a Slack/Zoom-style window
+    //     where breaks are suppressed; the indicator shouldn't surface
+    //     itself during a meeting/call. Reappears when suppression clears.
+    //
+    // The panel renders iff `pendingReminder != nil && !any occlusion`.
+    // Splitting the two occlusion sources (rather than a single `occluded`
+    // bool) means heads-up dismissing during suppression doesn't
+    // accidentally reveal the indicator.
     private var pendingReminder: SnoozedReminder?
-    private var occluded: Bool = false
+    private var headsUpOccluded: Bool = false
+    private var suppressionActive: Bool = false
+    /// True while the break overlay is firing (or deferred waiting to
+    /// fire). The overlay itself is at `.screenSaver` window level so it
+    /// renders above the indicator's `.floating` panel, BUT the overlay's
+    /// SwiftUI content fades in over ~0.55s — during that fade the
+    /// indicator would otherwise show through. We instant-hide here so
+    /// nothing is left to show through.
+    private var breakActive: Bool = false
 
     /// The trackID closures call back with. Read by `takeAction` and
     /// `cancelAction` when the user clicks the indicator or its menu.
@@ -116,21 +130,48 @@ final class SnoozeIndicatorController {
         applyVisibility()
     }
 
-    /// Temporarily hide the indicator without forgetting the pending
-    /// trackID. Set to `true` when another "break is pending" surface
-    /// (heads-up, break overlay) is showing — we don't want two stacked
-    /// indicators competing for attention. Setting back to `false`
-    /// re-shows the indicator if `pendingTrackID` is still set.
-    func setOccluded(_ value: Bool) {
-        guard value != occluded else { return }
-        occluded = value
+    /// Hide the indicator while the pre-break heads-up banner is visible.
+    /// Two "break is pending" surfaces at once is noisy. Setting back to
+    /// `false` re-shows the indicator (subject to other occlusion flags).
+    func setHeadsUpVisible(_ value: Bool) {
+        guard value != headsUpOccluded else { return }
+        headsUpOccluded = value
         applyVisibility()
     }
 
+    /// Hide the indicator while suppression is active (user is in a
+    /// Slack/Zoom-style window where breaks are suppressed). The snooze
+    /// state in the coordinator is unchanged — the indicator just doesn't
+    /// surface during the meeting/call, and reappears when suppression
+    /// clears.
+    func setSuppressionActive(_ value: Bool) {
+        guard value != suppressionActive else { return }
+        suppressionActive = value
+        applyVisibility()
+    }
+
+    /// Hide the indicator while the break overlay is firing/deferred.
+    /// When toggling to `true`, the panel is torn down without the usual
+    /// fade-out — the overlay's own fade-in would otherwise show the
+    /// indicator briefly through its semi-transparent content.
+    func setBreakActive(_ value: Bool) {
+        guard value != breakActive else { return }
+        breakActive = value
+        if value {
+            // Skip fade: rip the window down right now.
+            tearDownWindowImmediately()
+        } else {
+            applyVisibility()
+        }
+    }
+
     /// Reconcile the panel's rendered state with the current intent +
-    /// occlusion flags. Called from `show` / `dismiss` / `setOccluded`.
+    /// occlusion flags. Called from every state-mutating entry point.
     private func applyVisibility() {
-        let shouldShow = pendingReminder != nil && !occluded
+        let shouldShow = pendingReminder != nil
+            && !headsUpOccluded
+            && !suppressionActive
+            && !breakActive
         if shouldShow {
             actuallyShow()
         } else {
@@ -514,6 +555,7 @@ private struct SnoozeIndicatorView: View {
                     // ticks + clay-red hand give the face proper contrast
                     // against the cream.
                     StopwatchDial(
+                        referenceDate: snoozedAt,
                         dialTop: dialTop,
                         dialBottom: dialBottom,
                         tickColor: tickColor,
@@ -567,48 +609,55 @@ private struct SnoozeIndicatorView: View {
 /// Local to this file because the snooze indicator is the only thing
 /// that uses it; lift to a shared file if another surface adopts it.
 private struct StopwatchDial: View {
+    /// Anchor for the hand's rotation. The hand's angle is computed as a
+    /// deterministic function of `(now - referenceDate)`, so it survives
+    /// any SwiftUI re-render — Space switches and app-activation cycles
+    /// no longer reset the hand to 0°.
+    let referenceDate: Date
     let dialTop: Color
     let dialBottom: Color
     let tickColor: Color
     let handColor: Color
     let size: CGFloat
-    @State private var angle: Double = 0
 
     private let tickInterval: TimeInterval = 1
     private let degreesPerTick: Double = 30
 
     var body: some View {
-        ZStack {
-            // Subtle top-light-to-bottom-darker gradient gives the flat
-            // cream face a hint of dimension — like light falling on a
-            // real dial.
-            Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [dialTop, dialBottom],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+        // `.periodic` ticks once per second from the reference; each tick
+        // re-evaluates the body with a fresh `context.date`. We compute
+        // the hand's angle from that date (not from a self-incrementing
+        // @State counter) so re-attaching the view doesn't restart the
+        // rotation. `.animation(_:value:)` on the rotation effect lets
+        // SwiftUI spring between the discrete per-second positions.
+        TimelineView(.periodic(from: referenceDate, by: tickInterval)) { context in
+            let elapsed = max(0, context.date.timeIntervalSince(referenceDate))
+            let angle = floor(elapsed / tickInterval) * degreesPerTick
+            ZStack {
+                // Subtle top-light-to-bottom-darker gradient gives the flat
+                // cream face a hint of dimension — like light falling on a
+                // real dial.
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [dialTop, dialBottom],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
                     )
-                )
 
-            tickMarks
-            clockHand
+                tickMarks
+                clockHand(angle: angle)
 
-            // Tiny pivot pin at the center where the hand attaches —
-            // gives the hand a believable anchor instead of floating in
-            // space. Same color as the hand so they read as one piece.
-            Circle()
-                .fill(handColor)
-                .frame(width: size * 0.10, height: size * 0.10)
-        }
-        .frame(width: size, height: size)
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(tickInterval))
-                withAnimation(.spring(duration: 0.55, bounce: 0.35)) {
-                    angle += degreesPerTick
-                }
+                // Tiny pivot pin at the center where the hand attaches —
+                // gives the hand a believable anchor instead of floating in
+                // space. Same color as the hand so they read as one piece.
+                Circle()
+                    .fill(handColor)
+                    .frame(width: size * 0.10, height: size * 0.10)
             }
+            .frame(width: size, height: size)
+            .animation(.spring(duration: 0.55, bounce: 0.35), value: angle)
         }
     }
 
@@ -633,7 +682,7 @@ private struct StopwatchDial: View {
     /// Rotating hand — a thin capsule pivoting from the dial center.
     /// Caller picks the color (typically a saturated accent like clay-red
     /// for a "stopwatch second hand" read).
-    private var clockHand: some View {
+    private func clockHand(angle: Double) -> some View {
         Capsule()
             .fill(handColor)
             .frame(width: max(1.5, size * 0.04), height: size * 0.36)

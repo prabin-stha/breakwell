@@ -164,6 +164,20 @@ final class FloatingBannerController {
         }
     }
 
+    /// Skip the fade — tear the banner down right now. Used when the break
+    /// overlay is about to appear: the overlay's content fades in over
+    /// ~0.55s, and a fading-out banner would show through that fade if
+    /// we used the normal animated dismiss.
+    func dismissImmediately() {
+        dismissTask?.cancel()
+        dismissTask = nil
+        currentState = nil
+        removeActivationObserver()
+        pendingTeardown = false
+        window?.orderOut(nil)
+        window = nil
+    }
+
     func dismiss() {
         dismissTask?.cancel()
         dismissTask = nil

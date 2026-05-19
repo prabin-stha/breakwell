@@ -192,8 +192,6 @@ struct FloatingBannerView: View {
     let state: FloatingBannerState
     let onDismiss: () -> Void
 
-    @State private var visible = false
-
     // Single warm-peach accent carries the visual signature of the banner:
     // hourglass icon, timer pill, italic emphasis phrase, "Begin now"
     // pill, and the pill's soft glow. Kept bright enough to read against
@@ -256,16 +254,14 @@ struct FloatingBannerView: View {
                     lineWidth: 0.5
                 )
         )
-        // Fade-in is owned by FloatingBannerController via NSWindow alpha
-        // animation — we keep only the slide-down here so the two effects
-        // don't compound (a SwiftUI .opacity would multiply with the
-        // NSWindow alpha, producing a slower, ease-of-easeOut curve).
-        .offset(y: visible ? 0 : -14)
-        .onAppear {
-            withAnimation(.spring(duration: 0.4, bounce: 0.2)) {
-                visible = true
-            }
-        }
+        // Entrance animation is owned entirely by FloatingBannerController
+        // (NSWindow alphaValue fade-in/out). We deliberately do NOT add a
+        // SwiftUI `.onAppear`-driven slide here: when the banner's NSWindow
+        // gets hidden + reshown on Space changes or app switches, AppKit
+        // re-fires `onAppear` on the embedded SwiftUI hierarchy, which
+        // would re-trigger any animation gated on view appearance. Keeping
+        // the entrance at the window-alpha layer means Space switches just
+        // re-show an already-built view at full alpha — no visual reset.
         .frame(width: 440, alignment: .leading)
         .fixedSize(horizontal: true, vertical: true)
     }
@@ -377,23 +373,34 @@ struct FloatingBannerView: View {
 
 /// Small filled circle that breathes — scales up and dims slightly, then
 /// settles back. Used in the timer pill to signal "live countdown" at a
-/// glance. Animation autoreverses forever; SwiftUI handles the easing.
+/// glance.
+///
+/// Time-driven via `TimelineView(.animation)` rather than the more typical
+/// `withAnimation(...).repeatForever(...)` on `.onAppear`. The repeat-forever
+/// pattern resets every time the embedding NSWindow gets hidden + reshown
+/// (Space changes, app switches), causing a visible stutter. Computing the
+/// scale/opacity from the wall clock makes the animation deterministic and
+/// continuous across any view re-attach.
 private struct PulsingDot: View {
     let color: Color
     let size: CGFloat
-    @State private var pulsing = false
+    /// Seconds per full pulse cycle (up + back down). 1.8s reads as a
+    /// gentle heartbeat without being distracting.
+    private let period: Double = 1.8
 
     var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: size, height: size)
-            .scaleEffect(pulsing ? 1.45 : 1.0)
-            .opacity(pulsing ? 0.55 : 1.0)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    pulsing = true
-                }
-            }
+        TimelineView(.animation) { context in
+            // Map time → [0, 1] via a sine wave so the motion eases in and
+            // out at both ends rather than snapping. The +1)/2 lifts the
+            // sine range from [-1, 1] into [0, 1].
+            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+            let t = (sin(phase * 2 * .pi) + 1) / 2
+            Circle()
+                .fill(color)
+                .frame(width: size, height: size)
+                .scaleEffect(1.0 + 0.45 * t)
+                .opacity(1.0 - 0.45 * t)
+        }
     }
 }
 

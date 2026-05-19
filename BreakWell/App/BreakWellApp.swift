@@ -188,9 +188,9 @@ struct BreakWellApp: App {
         // heads-up appears, hide the floating circle (two "break is
         // coming" surfaces at once would be noisy). When the heads-up
         // dismisses, the indicator re-appears if a snooze is still
-        // active (occluded back to false → applyVisibility re-renders).
+        // active and no other occlusion source is engaged.
         preBreakNotifier.onVisibilityChange = { visible in
-            snoozeIndicator.setOccluded(visible)
+            snoozeIndicator.setHeadsUpVisible(visible)
         }
         self.preBreakNotifier = preBreakNotifier
 
@@ -250,12 +250,19 @@ struct BreakWellApp: App {
         preBreakNotifier.start()
         breakSoundPlayer.start()
 
-        // Bridge engine → coordinator: every time the suppression engine
-        // publishes a new state, push it into the actor-isolated coordinator.
+        // Bridge engine → coordinator + snooze indicator. Each new
+        // suppression state goes two places:
+        //   1. The actor-isolated coordinator, which uses it to decide
+        //      whether to fire scheduled breaks or hold them in `.deferred`.
+        //   2. The snooze indicator, which hides itself when suppression
+        //      is active (we don't want the floating circle on screen
+        //      during a Slack/Zoom meeting).
         // `for await` drains the AsyncStream forever (until the app exits).
         Task { @MainActor in
             let stream = suppressionEngine.stream()
             for await state in stream {
+                snoozeIndicator.setSuppressionActive(state.isActive)
+                preBreakNotifier.setSuppressionActive(state.isActive)
                 await coordinator.setSuppressed(state.isActive)
             }
         }
@@ -285,6 +292,25 @@ struct BreakWellApp: App {
                     snoozeIndicator.show(reminder: breakSnooze)
                 } else {
                     snoozeIndicator.dismiss()
+                }
+            }
+        }
+
+        // Bridge coordinator phase → snooze indicator occlusion. When the
+        // break overlay is firing (or deferred and about to fire), the
+        // indicator must be torn down BEFORE the overlay's content fades
+        // in. The overlay window sits above the indicator in window-level
+        // terms, but its SwiftUI content fades from opacity 0 → 1 over
+        // ~0.55s — during that fade, a floating panel beneath would
+        // show through. `setBreakActive(true)` does a no-fade teardown.
+        Task { @MainActor in
+            let stream = await coordinator.phaseStream()
+            for await phase in stream {
+                switch phase {
+                case .firing, .deferred:
+                    snoozeIndicator.setBreakActive(true)
+                case .working:
+                    snoozeIndicator.setBreakActive(false)
                 }
             }
         }
