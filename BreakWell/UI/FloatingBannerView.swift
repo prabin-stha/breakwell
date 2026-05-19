@@ -3,42 +3,33 @@ import AppKit
 
 // MARK: - FloatingBannerView
 //
-// Purpose: SwiftUI content for the floating banner — icon, title, body,
-// action buttons, and a small close X. Sized per a `BannerProminence` tier
-// (`standard` for water-style banners, `prominent` for the pre-break heads-up).
+// Purpose: SwiftUI content for the floating banner — header strip with
+// icon + title + live timer, body copy, and a footer of action buttons.
 //
-// Architecture role: View layer for the floating banner UI. Lives in
-// Features/Hydration alongside its controller. The presenter / App layer
-// builds a `FloatingBannerState` and hands it to the controller, which
-// embeds this view.
+// Architecture role: View layer for the floating banner UI. The
+// presenter / App layer builds a `FloatingBannerState` and hands it to
+// the controller, which embeds this view.
 //
 // Key types defined:
-//   - BannerProminence: standard vs prominent size tier (currently unused
-//     by the editorial layout; left in place for future variants)
+//   - HeadsUpMessage: prefix/emphasis/suffix body-copy struct
 //   - FloatingBannerState: @Observable state passed to the view
-//   - BannerSizing: a value-type lookup table mapping prominence → numbers
-//     (carried over from the prior layout; not read by the editorial view)
-//   - FloatingBannerView: the editorial-style banner
-//   - DashedLine, EditorialActionButton: subviews
-//   - Color.darkened(by:): helper extension (currently unused but kept
-//     as a small utility for future button styling)
+//   - FloatingBannerView: the banner content
+//   - PulsingDot, PrimaryPillButton, SnoozeGroupPill, SnoozeOptionButton:
+//     subviews of the banner
 //
 // Used by:
 //   - FloatingBannerController (constructs a FloatingBannerView from state)
-//   - PreBreakNotifier (builds a FloatingBannerState with .clock icon)
-//   - presentHandler closure (builds a state with .symbol icon for water)
+//   - PreBreakNotifier (builds a FloatingBannerState for the pre-break heads-up)
 //
 // Swift / SwiftUI concepts a learner will see here:
-//   - @Observable on a class used as view state: reading `state.title`
-//     inside the view body subscribes that view to title changes.
+//   - @Observable on a class used as view state: reading `state.timer`
+//     inside the view body subscribes that view to timer changes.
 //   - .contentTransition(.numericText()): smooth digit-by-digit transitions
 //     for the countdown timer instead of crossfading the whole string.
-//   - `if let bodyText = state.body`: SwiftUI lets you use `if let` inside
-//     a view builder; the conditional rendering "just works".
 //   - .overlay(alignment:): stacks a view over the parent with an alignment
-//     anchor. Used for the top-right close button.
-//   - `NSColor(self).usingColorSpace(.sRGB)`: the canonical way to extract
-//     color components from a SwiftUI Color on macOS.
+//     anchor. Used for the close button at top-right.
+//   - TimelineView(.animation): deterministic time-driven animations that
+//     survive Space switches / app re-attach.
 
 /// Body copy for the editorial pre-break heads-up. The phrase is broken
 /// into three pieces so the view can render the `emphasis` portion in
@@ -59,27 +50,19 @@ struct HeadsUpMessage: Sendable, Equatable {
     )
 }
 
-/// Size + emphasis tier for a banner. The pre-break heads-up uses
-/// `.prominent`; background reminders like water use `.standard`.
-enum BannerProminence: Sendable {
-    case standard
-    case prominent
-}
-
 /// Observable state shared between the controller and the SwiftUI view.
-/// Mutating `title`, `timer`, or `actions` re-renders the view automatically.
+/// `timer` is the only mutating field — the caller writes a new string
+/// on every tick to drive the live countdown, and the view re-renders
+/// automatically via `@Observable`.
 @MainActor
 @Observable
 final class FloatingBannerState {
-    var title: String
-    var body: String?
-    let prominence: BannerProminence
-    var actions: [Action]
+    let title: String
+    let actions: [Action]
     /// Short countdown text rendered top-right ("0:08"). Updated each tick
-    /// by the caller alongside whatever else changes. Carried separately
-    /// from `title` because the editorial layout uses `title` as a static
-    /// section header ("A SMALL PAUSE") and this field for the dynamic
-    /// timer next to it.
+    /// by the caller. Carried separately from `title` because the layout
+    /// uses `title` as a static section header ("A SMALL PAUSE") and
+    /// this field for the dynamic timer.
     var timer: String
     /// Body copy. Picked once when the banner is created so the text
     /// doesn't shuffle mid-display — the user is reading it as the
@@ -95,81 +78,14 @@ final class FloatingBannerState {
 
     init(
         title: String,
-        body: String? = nil,
-        prominence: BannerProminence = .standard,
         actions: [Action] = [],
         timer: String = "",
         bodyMessage: HeadsUpMessage = .defaultMessage
     ) {
         self.title = title
-        self.body = body
-        self.prominence = prominence
         self.actions = actions
         self.timer = timer
         self.bodyMessage = bodyMessage
-    }
-}
-
-// MARK: - Sizing per prominence
-
-/// Value-type lookup table mapping a `BannerProminence` to concrete sizes.
-/// Kept as a struct (vs scattered constants) so the view body reads from a
-/// single object — easier to scan and to tweak when the design changes.
-struct BannerSizing {
-    let iconSize: CGFloat
-    let iconSymbolSize: CGFloat
-    let iconSpacing: CGFloat
-    let titleSize: CGFloat
-    let bodySize: CGFloat
-    let contentSpacing: CGFloat
-    let hPadding: CGFloat
-    let vPadding: CGFloat
-    let cornerRadius: CGFloat
-    let shadowOpacity: Double
-    let shadowRadius: CGFloat
-    let shadowY: CGFloat
-    let maxWidth: CGFloat
-    let buttonHPadding: CGFloat
-    let buttonVPadding: CGFloat
-    let buttonFontSize: CGFloat
-
-    init(_ prominence: BannerProminence) {
-        switch prominence {
-        case .standard:
-            self.iconSize = 38
-            self.iconSymbolSize = 16
-            self.iconSpacing = 12
-            self.titleSize = 17
-            self.bodySize = 13
-            self.contentSpacing = 10
-            self.hPadding = 14
-            self.vPadding = 12
-            self.cornerRadius = 16
-            self.shadowOpacity = 0.28
-            self.shadowRadius = 22
-            self.shadowY = 8
-            self.maxWidth = 520
-            self.buttonHPadding = 10
-            self.buttonVPadding = 5
-            self.buttonFontSize = 12
-        case .prominent:
-            self.iconSize = 44
-            self.iconSymbolSize = 19
-            self.iconSpacing = 14
-            self.titleSize = 20
-            self.bodySize = 13
-            self.contentSpacing = 12
-            self.hPadding = 18
-            self.vPadding = 15
-            self.cornerRadius = 20
-            self.shadowOpacity = 0.40
-            self.shadowRadius = 30
-            self.shadowY = 12
-            self.maxWidth = 580
-            self.buttonHPadding = 12
-            self.buttonVPadding = 6
-            self.buttonFontSize = 12
-        }
     }
 }
 
@@ -389,7 +305,12 @@ private struct PulsingDot: View {
     private let period: Double = 1.8
 
     var body: some View {
-        TimelineView(.animation) { context in
+        // 30 fps is enough for a slow 1.8s breathing cycle — uncapped
+        // `.animation` would tick at the display's native refresh (60 or
+        // 120 fps on ProMotion) and recompute the sine + rebuild the
+        // Circle view 2-4× more often than the eye can resolve at this
+        // size. Capping here roughly halves the heads-up's CPU cost.
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
             // Map time → [0, 1] via a sine wave so the motion eases in and
             // out at both ends rather than snapping. The +1)/2 lifts the
             // sine range from [-1, 1] into [0, 1].
@@ -504,24 +425,3 @@ private struct SnoozeOptionButton: View {
     }
 }
 
-// MARK: - Color darkening helper
-
-extension Color {
-    /// Returns the color with each RGB channel multiplied by `(1 - factor)`.
-    /// `factor` of 0.5 makes the color roughly half as bright while keeping
-    /// its hue. macOS 14 compatible — uses NSColor sRGB component access.
-    ///
-    /// SwiftUI's Color doesn't expose its components directly; we round-trip
-    /// through NSColor in the sRGB color space to read them.
-    func darkened(by factor: Double) -> Color {
-        let clamped = min(max(factor, 0), 1)
-        let multiplier = 1.0 - clamped
-        guard let rgb = NSColor(self).usingColorSpace(.sRGB) else { return self }
-        return Color(
-            red: Double(rgb.redComponent) * multiplier,
-            green: Double(rgb.greenComponent) * multiplier,
-            blue: Double(rgb.blueComponent) * multiplier,
-            opacity: Double(rgb.alphaComponent)
-        )
-    }
-}

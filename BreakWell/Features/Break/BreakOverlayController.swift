@@ -135,8 +135,14 @@ final class BreakOverlayController {
             // satisfy Swift 6 strict-concurrency checking.
             MainActor.assumeIsolated {
                 for window in windowsToClose {
-                    window.orderOut(nil)
+                    Self.teardownWindow(window)
                 }
+                // `windowsToClose` was the only remaining strong reference;
+                // when this closure returns it goes out of scope and the
+                // OverlayWindow instances deallocate. Their SwiftUI subtree
+                // (AuroraBackground / TimelineView) is fully released —
+                // without this teardown the 30 fps blob loop would keep
+                // running invisibly forever after a break ended.
             }
         })
     }
@@ -148,7 +154,7 @@ final class BreakOverlayController {
     /// monitor plugged in / removed / resolution changed).
     private func rebuildWindowsForCurrentScreens() {
         for window in windows {
-            window.orderOut(nil)
+            Self.teardownWindow(window)
         }
         windows.removeAll()
 
@@ -163,6 +169,27 @@ final class BreakOverlayController {
                 window.orderFront(nil)
             }
         }
+    }
+
+    /// Fully release an overlay window so its embedded SwiftUI tree
+    /// (including `AuroraBackground`'s `TimelineView(.animation)`) stops
+    /// rendering. Order matters:
+    ///   1. `contentView = nil` detaches the `NSHostingView`; SwiftUI
+    ///      then tears down the root view and cancels its TimelineView /
+    ///      `.task` modifiers.
+    ///   2. `orderOut(nil)` makes sure it's off-screen.
+    ///   3. `close()` ends the window lifecycle (delegate notification,
+    ///      removal from window list). With `isReleasedWhenClosed = false`,
+    ///      this is purely a lifecycle hook — actual deallocation is up
+    ///      to ARC, which fires once the caller drops its last strong
+    ///      reference.
+    ///
+    /// Static so it can run from inside the `runAnimationGroup` completion
+    /// without retaining `self`.
+    private static func teardownWindow(_ window: OverlayWindow) {
+        window.contentView = nil
+        window.orderOut(nil)
+        window.close()
     }
 
     private func makeOverlayWindow(for screen: NSScreen) -> OverlayWindow {

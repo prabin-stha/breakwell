@@ -50,29 +50,24 @@ final class SnoozeIndicatorController {
     /// and the window stays alive for the new fade-in.
     private var pendingTeardown: Bool = false
 
-    // Three independent signals combine to decide whether the panel is on
-    // screen:
+    // Signals combine to decide whether the panel is on screen:
     //   - `pendingReminder`: intent — there is a snoozed break waiting.
-    //   - `headsUpOccluded`: the pre-break heads-up is on screen, so we
-    //     hide to avoid two stacked "break is pending" surfaces.
     //   - `suppressionActive`: the user is in a Slack/Zoom-style window
     //     where breaks are suppressed; the indicator shouldn't surface
     //     itself during a meeting/call. Reappears when suppression clears.
+    //   - `extinguishedReminder`: a reminder we've already shown for and
+    //     then permanently hidden because either the pre-break heads-up
+    //     appeared or the break started firing. Either of those is a
+    //     "final" event for the current snooze — the indicator's job is
+    //     done. Subsequent stream emissions carrying the same reminder
+    //     don't resurrect it. Cleared when the snooze is dismissed
+    //     outright (break fires, user takes / cancels), so the next
+    //     snooze starts fresh.
     //
-    // The panel renders iff `pendingReminder != nil && !any occlusion`.
-    // Splitting the two occlusion sources (rather than a single `occluded`
-    // bool) means heads-up dismissing during suppression doesn't
-    // accidentally reveal the indicator.
+    // The panel renders iff `pendingReminder != nil && !suppressionActive`.
     private var pendingReminder: SnoozedReminder?
-    private var headsUpOccluded: Bool = false
     private var suppressionActive: Bool = false
-    /// True while the break overlay is firing (or deferred waiting to
-    /// fire). The overlay itself is at `.screenSaver` window level so it
-    /// renders above the indicator's `.floating` panel, BUT the overlay's
-    /// SwiftUI content fades in over ~0.55s — during that fade the
-    /// indicator would otherwise show through. We instant-hide here so
-    /// nothing is left to show through.
-    private var breakActive: Bool = false
+    private var extinguishedReminder: SnoozedReminder?
 
     /// The trackID closures call back with. Read by `takeAction` and
     /// `cancelAction` when the user clicks the indicator or its menu.
@@ -81,13 +76,21 @@ final class SnoozeIndicatorController {
     private let onTake: (String) -> Void
     private let onCancel: (String) -> Void
 
-    /// Window dimensions. Larger than the 54pt visible circle so the
-    /// hover scale-up (1.06×) doesn't push rendered pixels past the
-    /// window's edge, where AppKit clips them.
-    private let windowWidth: CGFloat = 64
-    private let windowHeight: CGFloat = 64
-    /// Inset from the top-right corner of the cursor's screen.
-    private let edgeInset: CGFloat = 14
+    /// Window dimensions. Larger than the 54pt visible circle for two
+    /// reasons:
+    ///   1. The hover scale-up (1.06×) needs room so AppKit doesn't clip
+    ///      the rendered pixels at the window's edge.
+    ///   2. The hover-revealed close button sits outside the clock circle
+    ///      in the top-right corner — we need bounds beyond the dial for
+    ///      that affordance to clear the dial visually.
+    private let windowWidth: CGFloat = 76
+    private let windowHeight: CGFloat = 76
+    /// Inset from the top-right corner of the cursor's screen. Tuned in
+    /// tandem with `windowWidth/Height`: increasing the window without
+    /// reducing this inset would push the visible dial away from the
+    /// screen corner. 8 + (76-54)/2 == 14 + (64-54)/2 = the old visible
+    /// position of the dial.
+    private let edgeInset: CGFloat = 8
     /// How often we re-check which screen the cursor is on. 1 sec is
     /// plenty — the indicator doesn't need frame-rate accuracy here.
     private let cursorPollInterval: TimeInterval = 1.0
@@ -102,14 +105,17 @@ final class SnoozeIndicatorController {
 
     /// Register intent to show the indicator for the given reminder.
     /// The reminder's `snoozedAt` and `nextFireAt` drive the progress
-    /// ring. Whether the panel actually appears depends on the current
-    /// `occluded` state — if another UI (e.g. the heads-up) is visible
-    /// the indicator stays hidden until that clears.
+    /// ring. Whether the panel actually appears depends on suppression
+    /// state and whether the reminder has already been extinguished.
     ///
     /// Idempotent: re-calling with the same reminder is a no-op for the
     /// window (which is identified by being-or-not-being present); the
     /// progress ring keeps animating from the same `snoozedAt`.
     func show(reminder: SnoozedReminder) {
+        // One-shot lifecycle: if heads-up has appeared or a break has
+        // fired for this exact snooze, the indicator is done for that
+        // snooze even if the coordinator re-broadcasts the same list.
+        if extinguishedReminder == reminder { return }
         // If a different reminder swaps in (rare — re-snooze), the
         // SwiftUI view's identity changes via its host re-render. We
         // tear down and rebuild the window so the new timing kicks in
@@ -124,54 +130,62 @@ final class SnoozeIndicatorController {
         applyVisibility()
     }
 
-    /// Clear the intent. Indicator goes away if currently visible.
+    /// Clear the intent. Indicator goes away if currently visible, and
+    /// the extinguishment lock is reset so the next distinct snooze can
+    /// surface fresh.
     func dismiss() {
         pendingReminder = nil
+        extinguishedReminder = nil
         applyVisibility()
     }
 
-    /// Hide the indicator while the pre-break heads-up banner is visible.
-    /// Two "break is pending" surfaces at once is noisy. Setting back to
-    /// `false` re-shows the indicator (subject to other occlusion flags).
+    /// Called when the pre-break heads-up banner becomes visible. This
+    /// is the indicator's "your time is up" cue — the heads-up itself
+    /// now carries the "break is coming" message, so the indicator is
+    /// retired for this snooze even after the heads-up dismisses. The
+    /// `false` direction is a no-op; the indicator doesn't come back
+    /// for the same snooze.
     func setHeadsUpVisible(_ value: Bool) {
-        guard value != headsUpOccluded else { return }
-        headsUpOccluded = value
-        applyVisibility()
+        guard value else { return }
+        extinguishCurrentReminder()
     }
 
     /// Hide the indicator while suppression is active (user is in a
     /// Slack/Zoom-style window where breaks are suppressed). The snooze
     /// state in the coordinator is unchanged — the indicator just doesn't
     /// surface during the meeting/call, and reappears when suppression
-    /// clears.
+    /// clears. Unlike heads-up / break-active, this one is reversible.
     func setSuppressionActive(_ value: Bool) {
         guard value != suppressionActive else { return }
         suppressionActive = value
         applyVisibility()
     }
 
-    /// Hide the indicator while the break overlay is firing/deferred.
-    /// When toggling to `true`, the panel is torn down without the usual
-    /// fade-out — the overlay's own fade-in would otherwise show the
-    /// indicator briefly through its semi-transparent content.
+    /// Called when the break overlay is firing or deferred about to fire.
+    /// Like the heads-up case, this permanently retires the indicator
+    /// for the current snooze. The window is torn down without the usual
+    /// fade-out so the overlay's own fade-in doesn't show it through.
     func setBreakActive(_ value: Bool) {
-        guard value != breakActive else { return }
-        breakActive = value
-        if value {
-            // Skip fade: rip the window down right now.
-            tearDownWindowImmediately()
-        } else {
-            applyVisibility()
+        guard value else { return }
+        extinguishCurrentReminder()
+    }
+
+    /// Mark the current snooze as extinguished and rip the window down.
+    /// Subsequent `show(reminder:)` calls with the same reminder no-op;
+    /// the next *distinct* snooze (different `snoozedAt`) starts fresh
+    /// once `dismiss()` clears the extinguish lock.
+    private func extinguishCurrentReminder() {
+        if let r = pendingReminder {
+            extinguishedReminder = r
         }
+        pendingReminder = nil
+        tearDownWindowImmediately()
     }
 
     /// Reconcile the panel's rendered state with the current intent +
     /// occlusion flags. Called from every state-mutating entry point.
     private func applyVisibility() {
-        let shouldShow = pendingReminder != nil
-            && !headsUpOccluded
-            && !suppressionActive
-            && !breakActive
+        let shouldShow = pendingReminder != nil && !suppressionActive
         if shouldShow {
             actuallyShow()
         } else {
@@ -224,11 +238,14 @@ final class SnoozeIndicatorController {
         panel.animationBehavior = .none
 
         // Build the SwiftUI view, embed inside our custom host that
-        // catches right-click.
+        // catches right-click. `onClose` shares the same handler as the
+        // context-menu "Cancel snooze" item — both surface the same
+        // affordance, just one via right-click and one via the hover X.
         let swiftUIView = SnoozeIndicatorView(
             snoozedAt: reminder.snoozedAt,
             nextFireAt: reminder.nextFireAt,
-            onTap: { [weak self] in self?.takeAction() }
+            onTap: { [weak self] in self?.takeAction() },
+            onClose: { [weak self] in self?.cancelAction() }
         )
         let hosting = NSHostingView(rootView: swiftUIView)
         hosting.wantsLayer = true
@@ -492,6 +509,10 @@ private struct SnoozeIndicatorView: View {
     /// When the break will fire again. Progress reaches 1.0 here.
     let nextFireAt: Date
     let onTap: () -> Void
+    /// Triggered by the hover-revealed X button in the top-right corner.
+    /// Routed by the controller to `cancelAction()` — same behavior as
+    /// the right-click "Cancel snooze" menu item.
+    let onClose: () -> Void
 
     @State private var hovering = false
 
@@ -515,59 +536,29 @@ private struct SnoozeIndicatorView: View {
     private let ringStroke: CGFloat = 3
 
     var body: some View {
-        // Outer container fills the NSHostingView bounds; the indicator
-        // is centered inside it. Without this wrapper, NSHostingView
-        // would anchor the smaller content at top-left and the hover
-        // scale would push pixels past the window's edge.
-        ZStack {
-            // `TimelineView` ticks at the chosen cadence so the progress
-            // ring visibly moves. 0.5 sec is twice the visual update
-            // rate the eye can resolve at this size — smooth enough
-            // without burning frames.
-            TimelineView(.periodic(from: snoozedAt, by: 0.5)) { context in
-                let progress = computeProgress(now: context.date)
-
-                ZStack {
-                    // Track ring — dark at low opacity. The dark groove
-                    // against the amber progress arc reads clearly on
-                    // the cream dial below.
-                    Circle()
-                        .strokeBorder(trackColor.opacity(0.18), lineWidth: ringStroke)
-
-                    // Filled progress arc. `trim` from 0 → progress,
-                    // rotated -90° so it starts at 12 o'clock.
-                    Circle()
-                        .trim(from: 0, to: progress)
-                        .stroke(
-                            progressColor,
-                            style: StrokeStyle(lineWidth: ringStroke, lineCap: .round)
-                        )
-                        // Match `strokeBorder`'s inset so the two rings
-                        // align on the same arc.
-                        .padding(ringStroke / 2)
-                        .rotationEffect(.degrees(-90))
-                        // Smooth between the discrete TimelineView updates
-                        // so the fill flows continuously between ticks.
-                        .animation(.linear(duration: 0.5), value: progress)
-
-                    // Cream stopwatch dial — sized to meet the ring's
-                    // inner edge with no gap (see `clockSize`). Dark
-                    // ticks + clay-red hand give the face proper contrast
-                    // against the cream.
-                    StopwatchDial(
-                        referenceDate: snoozedAt,
-                        dialTop: dialTop,
-                        dialBottom: dialBottom,
-                        tickColor: tickColor,
-                        handColor: handColor,
-                        size: clockSize
-                    )
-                }
-            }
-            .frame(width: containerSize, height: containerSize)
+        // The clock dial sits centered. The hover region encompasses the
+        // entire window (via `.contentShape(Rectangle())` on the outer
+        // frame) so the close-button corner is part of the hover area
+        // too — without that, moving the cursor toward the X would exit
+        // the clock's hover region first and the X would vanish before
+        // it could be clicked.
+        clockBody
             .scaleEffect(hovering ? 1.06 : 1.0)
-            .contentShape(Circle())
-            .onTapGesture(perform: onTap)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .overlay(alignment: .bottomLeading) {
+                closeButton
+                    .opacity(hovering ? 1 : 0)
+                    .scaleEffect(hovering ? 1 : 0.55, anchor: .center)
+                    // Hidden when not hovering — disable hit testing too
+                    // so the invisible button doesn't swallow stray clicks
+                    // in the bottom-left corner of the window.
+                    .allowsHitTesting(hovering)
+            }
+            .animation(.smooth(duration: 0.18), value: hovering)
+            // Full-window hover region: the entire 76×76 NSHostingView
+            // bounds, not just the visible 54pt dial. Lets the user move
+            // from dial to close-X without dropping the hover state.
+            .contentShape(Rectangle())
             .onHover { value in
                 hovering = value
                 if value {
@@ -582,10 +573,82 @@ private struct SnoozeIndicatorView: View {
                     hovering = false
                 }
             }
-            .animation(.smooth(duration: 0.18), value: hovering)
             .help("Break pending — click to take now")
+    }
+
+    /// The centered clock dial: progress ring + cream stopwatch face.
+    /// Click area is the circle itself (separate `contentShape`) so the
+    /// empty window corners don't accidentally fire `onTap`.
+    private var clockBody: some View {
+        // `TimelineView` ticks at the chosen cadence so the progress
+        // ring visibly moves. 0.5 sec is twice the visual update rate
+        // the eye can resolve at this size — smooth enough without
+        // burning frames.
+        TimelineView(.periodic(from: snoozedAt, by: 0.5)) { context in
+            let progress = computeProgress(now: context.date)
+
+            ZStack {
+                // Track ring — dark at low opacity. The dark groove
+                // against the amber progress arc reads clearly on the
+                // cream dial below.
+                Circle()
+                    .strokeBorder(trackColor.opacity(0.18), lineWidth: ringStroke)
+
+                // Filled progress arc. `trim` from 0 → progress, rotated
+                // -90° so it starts at 12 o'clock.
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(
+                        progressColor,
+                        style: StrokeStyle(lineWidth: ringStroke, lineCap: .round)
+                    )
+                    // Match `strokeBorder`'s inset so the two rings
+                    // align on the same arc.
+                    .padding(ringStroke / 2)
+                    .rotationEffect(.degrees(-90))
+                    // Smooth between the discrete TimelineView updates
+                    // so the fill flows continuously between ticks.
+                    .animation(.linear(duration: 0.5), value: progress)
+
+                // Cream stopwatch dial — sized to meet the ring's inner
+                // edge with no gap (see `clockSize`). Dark ticks +
+                // clay-red hand give the face proper contrast against
+                // the cream.
+                StopwatchDial(
+                    referenceDate: snoozedAt,
+                    dialTop: dialTop,
+                    dialBottom: dialBottom,
+                    tickColor: tickColor,
+                    handColor: handColor,
+                    size: clockSize
+                )
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: containerSize, height: containerSize)
+        .contentShape(Circle())
+        .onTapGesture(perform: onTap)
+    }
+
+    /// Small circular X badge that appears on hover in the top-right
+    /// corner of the window, OUTSIDE the clock circle. Click cancels
+    /// the snooze entirely (same as right-click → "Cancel snooze").
+    /// Uses the SF Symbol `xmark.circle.fill` so the disc + X read as a
+    /// single piece at small size; palette rendering gives a white X on
+    /// a dark disc that stands clear of any background.
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 16, weight: .regular))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(
+                    Color.white.opacity(0.95),
+                    Color.black.opacity(0.7)
+                )
+                .shadow(color: .black.opacity(0.35), radius: 2, x: 0, y: 1)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Cancel snooze")
     }
 
     /// Fraction of the snooze window that has elapsed, clamped to [0, 1].

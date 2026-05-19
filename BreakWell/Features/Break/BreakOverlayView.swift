@@ -318,9 +318,11 @@ private struct ClockIndicator: View {
 /// frame-accurate time-driven updates without spinning a separate clock.
 struct AuroraBackground: View {
     var body: some View {
-        // 30 fps cap on the redraw cadence. Aurora motion is slow; we
-        // don't need 60+ fps. minimumInterval avoids wasting energy.
-        TimelineView(.animation(minimumInterval: 1.0/30, paused: false)) { timeline in
+        // 15 fps cap. The blob phases use `t * 0.07 ... 0.10`, so a single
+        // frame advances the slowest blob by ~0.0046 rad ≈ 0.26° of its
+        // orbit — well below visible motion. Going from 30 → 15 fps cuts
+        // the per-frame work in half with no visible difference.
+        TimelineView(.animation(minimumInterval: 1.0/15, paused: false)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             GeometryReader { geo in
                 ZStack {
@@ -356,6 +358,13 @@ struct AuroraBackground: View {
                          phase: t * 0.07 + 4.0, ampX: 0.10, ampY: 0.12,
                          scale: 1.2, opacity: 0.45, size: geo.size)
                 }
+                // Rasterize the four-blob composite into a single Metal-
+                // backed texture per frame. Without this, SwiftUI composites
+                // four heavily-blurred fullscreen layers on the CPU every
+                // frame — the dominant cost of the overlay. With it, the
+                // blur and compositing run on the GPU as one operation,
+                // and SwiftUI just animates a single texture.
+                .drawingGroup(opaque: true)
             }
             .ignoresSafeArea()
         }

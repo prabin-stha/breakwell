@@ -1,6 +1,5 @@
 import Foundation
 import UserNotifications
-import SwiftUI
 import os
 
 // MARK: - NotificationService + PreBreakNotifier
@@ -106,7 +105,7 @@ final class PreBreakNotifier {
 
     /// Fires `(true)` when the banner becomes visible and `(false)` when
     /// it's dismissed. BreakWellApp wires this to the snooze indicator's
-    /// `setOccluded(_:)` so the floating circle hides while the heads-up
+    /// `setHeadsUpVisible(_:)` so the floating circle hides while the heads-up
     /// is on screen — two "break is pending" surfaces at once would be
     /// noisy.
     var onVisibilityChange: ((Bool) -> Void)?
@@ -238,10 +237,8 @@ final class PreBreakNotifier {
         // per tick would shuffle the text mid-read.
         let message = Self.messagePool.randomElement() ?? .defaultMessage
         let state = FloatingBannerState(
-            // Static header label in the editorial layout.
+            // Static header label rendered as the small-caps "A SMALL PAUSE".
             title: "A small pause",
-            body: nil,
-            prominence: .prominent,
             actions: makeActions(),
             timer: formatShortTime(initialRemaining),
             bodyMessage: message

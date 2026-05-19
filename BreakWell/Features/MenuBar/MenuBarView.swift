@@ -88,8 +88,11 @@ struct MenuBarView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     // Digit slide rather than crossfade for the countdown.
+                    // `.contentTransition(.numericText())` is enough on its
+                    // own — adding `.animation(.default, value: statusTitle)`
+                    // here would fire a second concurrent animation pass
+                    // every second, doubling the per-tick render cost.
                     .contentTransition(.numericText())
-                    .animation(.default, value: statusTitle)
                 // Ambient daily-completion stat. Hidden when zero so the
                 // popover doesn't display "0 breaks today" first thing in
                 // the morning — that reads as a scold, not a stat.

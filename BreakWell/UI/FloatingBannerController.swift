@@ -51,7 +51,6 @@ import SwiftUI
 /// let banner = FloatingBannerController()
 /// let state = FloatingBannerState(
 ///     title: "A small pause",
-///     prominence: .prominent,
 ///     timer: "0:30"
 /// )
 /// banner.show(state)            // auto-dismisses after 8 seconds
