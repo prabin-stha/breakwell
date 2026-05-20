@@ -69,7 +69,18 @@ info "About to remove:"
 echo
 
 if [[ $ASSUME_YES -eq 0 ]]; then
-  read -rp "Continue? [y/N] " reply
+  # When the script is invoked via `curl … | bash`, stdin is the curl
+  # pipe — already consumed — so a plain `read` returns immediately with
+  # empty input and the prompt would appear to do nothing. Detect that
+  # case and read from the controlling terminal instead. Falls back to
+  # requiring `-y` if there's no terminal at all (CI / headless runs).
+  if [[ -t 0 ]]; then
+    read -rp "Continue? [y/N] " reply
+  elif [[ -r /dev/tty ]]; then
+    read -rp "Continue? [y/N] " reply < /dev/tty
+  else
+    die "Non-interactive shell with no controlling terminal. Re-run with -y to confirm."
+  fi
   [[ "$reply" =~ ^[Yy]$ ]] || { warn "Aborted."; exit 1; }
 fi
 
