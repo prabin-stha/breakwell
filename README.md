@@ -38,10 +38,6 @@ That's it. The script handles everything — no manual steps required.
 curl -fsSL https://raw.githubusercontent.com/prabin-stha/breakwell/main/scripts/uninstall.sh | bash
 ```
 
-By default the uninstaller removes the app but keeps your settings, so a future reinstall picks up where you left off. To wipe everything — preferences, daily stats, caches — pass `--purge`:
+The uninstaller removes the app from `/Applications` and asks for confirmation before doing anything. Add `-y` to skip the prompt if you're scripting it.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/prabin-stha/breakwell/main/scripts/uninstall.sh | bash -s -- --purge
-```
-
-The uninstaller asks for confirmation before deleting anything. Add `-y` to skip the prompt if you're scripting it.
+Your settings and daily stats are preserved at `~/Library/Containers/com.prabin.BreakWell` so a future reinstall picks up where you left off. To wipe that too, drag the folder to the Trash from Finder.
