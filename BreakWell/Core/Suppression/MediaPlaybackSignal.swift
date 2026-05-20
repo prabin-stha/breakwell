@@ -104,7 +104,11 @@ final class MediaPlaybackSignal: SuppressionSignal {
     private func update(audio: Bool) {
         guard audio != frontmostHasAudio else { return }
         frontmostHasAudio = audio
-        logger.info("frontmost audio: \(audio)")
+        // .debug rather than .info — this fires every time the user
+        // switches between an audio-playing app and a silent one, and
+        // its presence in the unified log would let any Console.app
+        // reader infer media-consumption patterns. Errors keep .info.
+        logger.debug("frontmost audio: \(audio)")
         recompute()
     }
 
@@ -146,7 +150,16 @@ final class MediaPlaybackSignal: SuppressionSignal {
 
         // Step 2: allocate room and fetch the list. `withUnsafeMutableBufferPointer`
         // gives the C call a contiguous pointer into our Swift array.
+        //
+        // The `count > 0` guard is defensive: CoreAudio in practice always
+        // returns a multiple of the type size, so `dataSize > 0` implies
+        // `count >= 1`. But if a future macOS ever returns a `dataSize`
+        // smaller than `sizeof(AudioObjectID)`, the integer division would
+        // round to 0, the array would be empty, and `buffer.baseAddress`
+        // would be nil — making the force-unwrap below a hard crash. The
+        // guard turns that into a clean "no audio processes detected".
         let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        guard count > 0 else { return false }
         var audioObjectIDs = [AudioObjectID](repeating: 0, count: count)
         status = audioObjectIDs.withUnsafeMutableBufferPointer { buffer in
             AudioObjectGetPropertyData(

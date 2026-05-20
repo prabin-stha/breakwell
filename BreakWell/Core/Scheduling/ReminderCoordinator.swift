@@ -245,7 +245,7 @@ actor ReminderCoordinator {
         if case .working = phase {
             recomputeWorkingState()
         }
-        logger.info("postponed \(trackID) by \(Int(seconds))s")
+        logger.debug("postponed \(trackID) by \(Int(seconds))s")
     }
 
     func removeTrack(id: String) {
@@ -268,7 +268,7 @@ actor ReminderCoordinator {
             preempt(current.track)
         }
         present(track)
-        logger.info("→ manual fire \(track.id)")
+        logger.debug("→ manual fire \(track.id)")
     }
 
     func skipBreak() {
@@ -334,7 +334,7 @@ actor ReminderCoordinator {
         publishSnoozedReminders()
 
         let postponeNote = seconds.map { " (refire in \(Int($0))s)" } ?? ""
-        logger.info("snoozed \(trackId)\(postponeNote)")
+        logger.debug("snoozed \(trackId)\(postponeNote)")
     }
 
     /// Take a previously-snoozed break right now. Removes the snooze
@@ -357,7 +357,7 @@ actor ReminderCoordinator {
             preempt(current.track)
         }
         present(track)
-        logger.info("→ took snoozed break \(trackId)")
+        logger.debug("→ took snoozed break \(trackId)")
     }
 
     /// Cancel a snoozed break without taking it. The indicator goes away;
@@ -366,7 +366,7 @@ actor ReminderCoordinator {
         guard snoozedReminders.contains(where: { $0.trackId == trackId }) else { return }
         snoozedReminders.removeAll { $0.trackId == trackId }
         publishSnoozedReminders()
-        logger.info("cleared snooze \(trackId)")
+        logger.debug("cleared snooze \(trackId)")
     }
 
     func takeDeferredBreakNow() {
@@ -374,7 +374,7 @@ actor ReminderCoordinator {
               let track = tracks.first(where: { $0.id == content.trackID }) else { return }
         deferredFireAt = nil
         tryShow(track)
-        logger.info("→ deferred \(content.trackID) taken manually")
+        logger.debug("→ deferred \(content.trackID) taken manually")
     }
 
     /// Driven by `SuppressionEngine`. Same defer/grace/absorb semantics as
@@ -384,7 +384,7 @@ actor ReminderCoordinator {
     func setSuppressed(_ suppressed: Bool) {
         guard suppressed != isSuppressed else { return }
         isSuppressed = suppressed
-        logger.info("suppressed: \(suppressed)")
+        logger.debug("suppressed: \(suppressed)")
         handleSuppressionChange()
     }
 
@@ -500,7 +500,7 @@ actor ReminderCoordinator {
                     // level, branch here.
                     let content = track.makeContent()
                     setPhase(.deferred(since: now, content: content))
-                    logger.info("→ \(track.id) deferred (suppressed)")
+                    logger.debug("→ \(track.id) deferred (suppressed)")
                     for other in due where other.id != track.id {
                         nextFireDates[other.id] = now.addingTimeInterval(other.interval.seconds)
                     }
@@ -526,7 +526,7 @@ actor ReminderCoordinator {
                 let trackID = content.trackID
                 for cont in completionContinuations.values { cont.yield(trackID) }
                 endFiring()
-                logger.info("→ \(trackID) finished")
+                logger.debug("→ \(trackID) finished")
             } else {
                 setPhase(.firing(remaining: next, content: content))
             }
@@ -537,7 +537,7 @@ actor ReminderCoordinator {
                       let track = tracks.first(where: { $0.id == content.trackID }) else { return }
                 deferredFireAt = nil
                 tryShow(track)
-                logger.info("→ \(content.trackID) deferred firing now")
+                logger.debug("→ \(content.trackID) deferred firing now")
             }
         }
     }
@@ -549,7 +549,7 @@ actor ReminderCoordinator {
     private func tryShow(_ track: any ReminderTrack) {
         if let current = currentlyShowing {
             if track.interruption.priority > current.track.interruption.priority {
-                logger.info("preempting \(current.track.id) for \(track.id)")
+                logger.debug("preempting \(current.track.id) for \(track.id)")
                 preempt(current.track)
                 present(track)
             } else {
@@ -611,7 +611,7 @@ actor ReminderCoordinator {
         }
         deferralCounts[track.id] = count
         nextFireDates[track.id] = Date().addingTimeInterval(preemptionDelay)
-        logger.info("deferred \(track.id) +2min (attempt \(count) of \(self.maxDeferrals))")
+        logger.debug("deferred \(track.id) +2min (attempt \(count) of \(self.maxDeferrals))")
     }
 
     private func handleExpiration(trackID: String) {
@@ -619,7 +619,7 @@ actor ReminderCoordinator {
         // the showing track (or we preempted it).
         guard let current = currentlyShowing, current.track.id == trackID else { return }
         currentlyShowing = nil
-        logger.info("\(trackID) presentation slot freed")
+        logger.debug("\(trackID) presentation slot freed")
     }
 
     private func endFiring() {
@@ -660,10 +660,10 @@ actor ReminderCoordinator {
             deferredFireAt = nil
             nextFireDates[track.id] = Date().addingTimeInterval(track.interval.seconds)
             recomputeWorkingState()
-            logger.info("\(track.id) deferred absorbed (waited \(Int(elapsed))s)")
+            logger.debug("\(track.id) deferred absorbed (waited \(Int(elapsed))s)")
         } else {
             deferredFireAt = Date().addingTimeInterval(postDeferralGrace)
-            logger.info("\(track.id) deferred firing in \(Int(self.postDeferralGrace))s")
+            logger.debug("\(track.id) deferred firing in \(Int(self.postDeferralGrace))s")
         }
     }
 }

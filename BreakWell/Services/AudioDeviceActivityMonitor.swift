@@ -239,7 +239,7 @@ final class AudioDeviceActivityMonitor {
     private func updateActive(_ nowActive: Bool) {
         guard nowActive != isActive else { return }
         isActive = nowActive
-        logger.info("active: \(nowActive)")
+        logger.debug("active: \(nowActive)")
         onChange?()
     }
 
