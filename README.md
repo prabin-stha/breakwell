@@ -11,7 +11,7 @@ No accounts. No network calls. No analytics. Sandboxed, with no access to your m
 Paste this into your Terminal and press Enter:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/prabin-niural/breakwell/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/prabin-stha/breakwell/main/scripts/install.sh | bash
 ```
 
 That's it. The script handles everything — no manual steps required.
@@ -35,13 +35,13 @@ That's it. The script handles everything — no manual steps required.
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/prabin-niural/breakwell/main/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/prabin-stha/breakwell/main/scripts/uninstall.sh | bash
 ```
 
 By default the uninstaller removes the app but keeps your settings, so a future reinstall picks up where you left off. To wipe everything — preferences, daily stats, caches — pass `--purge`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/prabin-niural/breakwell/main/scripts/uninstall.sh | bash -s -- --purge
+curl -fsSL https://raw.githubusercontent.com/prabin-stha/breakwell/main/scripts/uninstall.sh | bash -s -- --purge
 ```
 
 The uninstaller asks for confirmation before deleting anything. Add `-y` to skip the prompt if you're scripting it.
